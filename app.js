@@ -234,6 +234,8 @@ function newGame(fromStates, fromMoves, fromSans, playerColor) {
   game.sans = fromSans ? fromSans.slice() : [];
   game.over = false; game.hintStep = 0;
   game.lastOpening = openingNameFor(game.sans);
+  chat.turns = [];
+  $('chatLog').innerHTML = '';
   ui.orientation = col;
   setContext(playContext());
   $('openingName').textContent = game.lastOpening || '';
@@ -304,7 +306,9 @@ function computerMove() {
         $('openingName').textContent = name;
       }
       const extra = E.inCheck(curState(), game.player) ? ' <span class="bad">Du stehst im Schach!</span>' : '';
-      appendCoach(`<p class="small">Computer spielt <b>${de(san)}</b>.${extra}</p>`);
+      appendCoach(`<p>🤖 Computer spielt <b>${de(san)}</b>: Der Zug ${joinReasons(explainMove(s, m).slice(0, 3))}.${extra}</p>`);
+      const th = describeThreat(curState(), E.other(game.player));
+      if (th) appendCoach(`<p class="warn">⚠ Achtung, Drohung: ${th.text}. Was machst du dagegen?</p>`);
     }
     updatePlayUI();
   }, 60);
@@ -346,10 +350,94 @@ function chooseComputerMove(s) {
   return r ? r.move : null;
 }
 
-// ---------- Trainer-Feedback ----------
-function describeCapture(m, whose) {
-  const t = E.typeOf(m.captured);
-  return `${whose === 'mine' ? NAME_ACC[t] : NAME_THEIR[t]} auf ${E.sqName(m.to)}`;
+// ---------- Zug-Erklärungen ----------
+const sqWord = sq => E.sqName(sq);
+const fmtScore = v => {
+  if (v > E.MATE - 100) return 'Matt';
+  if (v < -E.MATE + 100) return 'wird matt';
+  const p = v / 100;
+  return (p > 0 ? '+' : p < 0 ? '−' : '±') + Math.abs(p).toFixed(1);
+};
+
+// Steht die Figur auf `sq` in Gefahr (ungedeckt oder von einer billigeren Figur angegriffen)?
+function isHanging(s, sq) {
+  const p = s.board[sq];
+  if (!p || E.typeOf(p) === 'k') return false;
+  const owner = E.colorOf(p), enemy = E.other(owner);
+  const att = E.attackers(s.board, sq, enemy);
+  if (!att.length) return false;
+  if (!E.attackers(s.board, sq, owner).length) return true;
+  return Math.min(...att.map(a => E.VALUE[E.typeOf(s.board[a])] || 0)) < E.VALUE[E.typeOf(p)];
+}
+
+function matesInOne(s) {
+  return E.legalMoves(s).filter(x => {
+    const n = E.makeMove(s, x);
+    return E.inCheck(n, n.turn) && !E.legalMoves(n).length;
+  });
+}
+
+// Liefert Gründe (Satzteile), was ein Zug bewirkt. Subjekt: „Der Zug …“
+function explainMove(s, m) {
+  const R = [];
+  const me = s.turn, opp = E.other(me), t = E.typeOf(m.piece);
+  const ns = E.makeMove(s, m);
+  const oppMoves = E.legalMoves(ns);
+  const check = E.inCheck(ns, opp);
+  if (check && !oppMoves.length) return ['setzt Matt!'];
+  if (!check && !oppMoves.length) return ['führt zum Patt (Remis)!'];
+  if (m.flag === 'K' || m.flag === 'Q') R.push('bringt den König mit der Rochade in Sicherheit und holt den Turm ins Spiel');
+  if (m.promo) R.push(`wandelt den Bauern in ${NAME_THEIR[E.typeOf(m.promo)]} um`);
+  if (m.captured) {
+    const ct = E.typeOf(m.captured);
+    const defended = m.flag !== 'ep' && E.attackers(s.board, m.to, opp).length > 0;
+    if (!defended) R.push(`schlägt ${NAME_THEIR[ct]} auf ${sqWord(m.to)} – ${ct === 'q' ? 'die' : 'der'} war ungedeckt, also reiner Materialgewinn`);
+    else if (E.VALUE[ct] > E.VALUE[t]) R.push(`schlägt ${NAME_THEIR[ct]} (Wert ${E.VALUE[ct] / 100}) mit einer billigeren Figur (Wert ${E.VALUE[t] / 100}) – ein guter Tausch`);
+    else R.push(`schlägt ${NAME_THEIR[ct]} auf ${sqWord(m.to)} (Abtausch)`);
+  }
+  if (check) R.push(oppMoves.length <= 2 ? 'gibt Schach – der Gegner hat fast keine Züge mehr' : 'gibt Schach');
+  // Neue Angriffe der gezogenen Figur
+  const targets = E.attacksFrom(ns, m.to).filter(sq => {
+    const tt = E.typeOf(ns.board[sq]);
+    return tt === 'k' || E.VALUE[tt] > E.VALUE[t] || !E.attackers(ns.board, sq, opp).length;
+  });
+  const tName = sq => (E.typeOf(ns.board[sq]) === 'k' ? 'den König' : `${NAME_THEIR[E.typeOf(ns.board[sq])]} auf ${sqWord(sq)}`);
+  if (targets.length >= 2) R.push(`greift gleichzeitig ${targets.map(tName).join(' und ')} an – eine Gabel!`);
+  else if (targets.length === 1 && E.typeOf(ns.board[targets[0]]) !== 'k') R.push(`greift ${tName(targets[0])} an`);
+  // Rettet oder deckt eigene Figuren
+  const dangerBefore = threatSquares(s, me).danger, dangerAfter = threatSquares(ns, me).danger;
+  if (dangerBefore.includes(m.from) && !dangerAfter.includes(m.to)) R.push(`bringt ${NAME_THEIR[t]} aus der Gefahr`);
+  const saved = dangerBefore.filter(sq => sq !== m.from && sq !== m.to && ns.board[sq] === s.board[sq] && !dangerAfter.includes(sq));
+  if (saved.length) R.push(`schützt ${NAME_THEIR[E.typeOf(s.board[saved[0]])]} auf ${sqWord(saved[0])}`);
+  // Mattdrohung
+  if (!check && matesInOne({ ...ns, turn: me, ep: -1 }).length) R.push('droht im nächsten Zug Matt!');
+  // Ruhige Züge
+  if (!R.length) {
+    const backRank = me === 'w' ? m.from >= 56 : m.from < 8;
+    if ((t === 'n' || t === 'b') && backRank) R.push('entwickelt eine Figur – sie kommt aktiv ins Spiel');
+    else if (t === 'p' && [27, 28, 35, 36].includes(m.to)) R.push('besetzt das Zentrum und nimmt dem Gegner wichtige Felder');
+    else if (t === 'p' && E.isPassed(ns.board, m.to, me)) R.push('schiebt einen Freibauern Richtung Umwandlung');
+    else if (t === 'r' && !ns.board.some((p, i) => i % 8 === m.to % 8 && p && E.typeOf(p) === 'p')) R.push('stellt den Turm auf eine offene Linie');
+    else if (t === 'k') R.push('bewegt den König');
+    else R.push('verbessert die Stellung');
+  }
+  // Warnung: steht die gezogene Figur jetzt ungeschützt?
+  if (!m.promo && isHanging(ns, m.to) && !(m.captured && E.VALUE[E.typeOf(m.captured)] >= E.VALUE[t])) {
+    R.push(`aber Vorsicht: ${NAME_THEIR[t]} steht auf ${sqWord(m.to)} nicht sicher`);
+  }
+  return R;
+}
+
+const joinReasons = r => (r.length > 1 ? r.slice(0, -1).join(', ') + ' und ' + r[r.length - 1] : r[0] || '');
+
+// Was droht die Seite `color`, wenn sie noch einmal ziehen dürfte?
+function describeThreat(s, color) {
+  const th = E.threatOf(s, color, 2);
+  if (!th || !th.move) return null;
+  const mate = th.score > E.MATE - 100;
+  if (!mate && th.gain < 150) return null;
+  const san = de(E.toSAN(th.state, th.move));
+  return { san, move: th.move, mate, text: mate ? `${san} mit Matt` : `${san} – ${joinReasons(explainMove(th.state, th.move).slice(0, 2))}` };
 }
 
 function coachFeedback(before, m, prevMoves) {
@@ -364,39 +452,38 @@ function coachFeedback(before, m, prevMoves) {
     return '<p class="warn">Patt! Der Gegner hat keinen Zug, steht aber nicht im Schach – das ist ein Remis.</p>';
   }
 
-  const res = E.analyzeAll(before, 2);
-  const best = res[0];
-  const mine = res.find(r => sameMove(r.move, m)) || best;
-  const loss = best.score - mine.score;
+  const best = E.bestMove(before, 3);
+  const myScore = sameMove(best.move, m) ? best.score : E.scoreMove(before, m, 3);
+  const loss = best.score - myScore;
   const bestSan = de(E.toSAN(before, best.move, legal));
   let quality;
-
-  if (sameMove(best.move, m) || loss <= 10) quality = 'best';
+  if (sameMove(best.move, m) || loss <= 15) quality = 'best';
   else if (loss <= 50) quality = 'good';
   else if (loss <= 130) quality = 'inaccurate';
   else if (loss <= 300) quality = 'mistake';
   else quality = 'blunder';
 
-  // Warum war der Zug schlecht?
-  let why = '';
-  if (quality === 'mistake' || quality === 'blunder') {
-    const reply = E.bestMove(after, 2);
+  const mineWhy = joinReasons(explainMove(before, m));
+  const bestWhy = joinReasons(explainMove(before, best.move));
+  let problem = '';
+  if (quality === 'mistake' || quality === 'blunder' || quality === 'inaccurate') {
+    const reply = E.bestMove(after, 3);
     if (reply && reply.move) {
       const rsan = de(E.toSAN(after, reply.move));
-      if (reply.score > E.MATE - 100) why = `Der Gegner kann jetzt <b>Matt</b> setzen (${rsan})!`;
-      else if (reply.move.captured) why = `Der Gegner kann ${describeCapture(reply.move, 'mine')} schlagen (${rsan}).`;
-      else why = `Der Gegner hat jetzt den starken Zug <b>${rsan}</b>.`;
+      problem = reply.score > E.MATE - 100
+        ? `Der Gegner kann jetzt mit <b>${rsan}</b> Matt setzen!`
+        : `Die beste Antwort des Gegners ist <b>${rsan}</b>: Der Zug ${joinReasons(explainMove(after, reply.move).slice(0, 2))}.`;
     }
-    if (best.score > E.MATE - 100) why += ` Du hättest mit <b>${bestSan}</b> Matt setzen können!`;
-    else if (best.move.captured && !m.captured) why += ` Du hättest ${describeCapture(best.move, 'theirs')} schlagen können.`;
   }
 
   const praise = ['Sehr gut!', 'Stark!', 'Top-Zug!', 'Genau richtig!', 'Prima!'];
-  if (quality === 'best') parts.push(`<p class="good">⭐ ${de(san)} – ${pick(praise)} Das ist der beste Zug.</p>`);
-  else if (quality === 'good') parts.push(`<p class="good">👍 ${de(san)} – Guter Zug.</p>`);
-  else if (quality === 'inaccurate') parts.push(`<p class="warn">🤔 ${de(san)} – Etwas ungenau. Besser war <b>${bestSan}</b>.</p>`);
-  else if (quality === 'mistake') parts.push(`<p class="warn">❗ ${de(san)} – Ein Fehler. ${why} Besser war <b>${bestSan}</b>.</p>`);
-  else parts.push(`<p class="bad">❌ ${de(san)} – Grober Fehler! ${why} Besser war <b>${bestSan}</b>. <br><span class="small">Tipp: Mit „↶ Zurück“ kannst du den Zug zurücknehmen.</span></p>`);
+  const evalLine = `<p class="small">Bewertung für dich: ${fmtScore(best.score)} möglich, nach deinem Zug ${fmtScore(myScore)}${loss > 15 ? ` (Verlust ${(loss / 100).toFixed(1)} Bauern)` : ''}.</p>`;
+  if (quality === 'best') parts.push(`<p class="good">⭐ ${de(san)} – ${pick(praise)} Das ist der beste Zug.</p><p>Dein Zug ${mineWhy}.</p>`);
+  else if (quality === 'good') parts.push(`<p class="good">👍 ${de(san)} – Guter Zug.</p><p>Dein Zug ${mineWhy}. Noch etwas besser war <b>${bestSan}</b> (${bestWhy}).</p>`);
+  else if (quality === 'inaccurate') parts.push(`<p class="warn">🤔 ${de(san)} – Etwas ungenau.</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p>`);
+  else if (quality === 'mistake') parts.push(`<p class="warn">❗ ${de(san)} – Ein Fehler.</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p>`);
+  else parts.push(`<p class="bad">❌ ${de(san)} – Grober Fehler!</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p><p class="small">Tipp: Mit „↶ Zurück“ kannst du den Zug zurücknehmen.</p>`);
+  parts.push(evalLine);
 
   if (quality === 'best' || quality === 'good' || quality === 'inaccurate') {
     const tip = principleTip(before, m, prevMoves, me);
@@ -558,17 +645,9 @@ function hint() {
       ui.hintFrom = -1; ui.arrows = [{ from: m.from, to: m.to }];
       const san = de(E.toSAN(s, m));
       const ns = E.makeMove(s, m);
-      let why = '';
-      if (r.score > E.MATE - 100) why = 'Das führt zum Matt!';
-      else if (m.captured) why = `So gewinnst du ${NAME_THEIR[E.typeOf(m.captured)]}.`;
-      else if (E.inCheck(ns, ns.turn)) why = 'Ein Schachgebot, das dem Gegner Probleme macht.';
-      else if (m.flag) why = m.flag === 'K' || m.flag === 'Q' ? 'Bring deinen König in Sicherheit.' : '';
-      else {
-        const thBefore = threatSquares(s, game.player).danger;
-        if (thBefore.includes(m.from)) why = 'Diese Figur war in Gefahr – so bringst du sie in Sicherheit.';
-        else why = 'Dieser Zug verbessert deine Stellung am meisten.';
-      }
-      appendCoach(`<p>💡 Mein Vorschlag: <b>${san}</b>. ${why}</p>`);
+      const why = r.score > E.MATE - 100 && !(E.inCheck(ns, ns.turn) && !E.legalMoves(ns).length)
+        ? 'Er führt zu einem erzwungenen Matt!' : `Der Zug ${joinReasons(explainMove(s, m))}.`;
+      appendCoach(`<p>💡 Mein Vorschlag: <b>${san}</b>. ${why} <span class="small">(Bewertung ${fmtScore(r.score)})</span></p>`);
     }
     render();
   }, 30);
@@ -610,6 +689,7 @@ function startLesson(o) {
   });
   renderSteps();
   lessonAdvance();
+  updateAskBox();
 }
 
 const lessonState = () => lesson.states[lesson.states.length - 1];
@@ -723,6 +803,7 @@ function startPuzzle(k) {
     canMove: () => !puzzle.solved,
     onMove: puzzleMove,
   });
+  updateAskBox();
 }
 
 function puzzleSolution(s, p) {
@@ -761,8 +842,300 @@ function puzzleMove(m) {
   }
 }
 
+// ===================== KI-Trainer (Fragen stellen) =====================
+const chat = { sample: null, tools: false, turns: [], ctl: null, busy: false };
+let mode = 'play';
+
+const DE_TO_EN = { S: 'N', L: 'B', T: 'R', D: 'Q', K: 'K' };
+// Akzeptiert deutsche (Sf3), englische (Nf3) oder Koordinaten-Notation (g1f3, g1-f3)
+function parseUserMove(s, text) {
+  const raw = String(text || '').trim().replace(/[!?+#]/g, '').replace(/0-0-0/g, 'O-O-O').replace(/0-0/g, 'O-O');
+  const legal = E.legalMoves(s);
+  const coord = raw.toLowerCase().match(/^([a-h][1-8])\s*[-x ]?\s*([a-h][1-8])\s*=?([qrbnsdlt])?$/);
+  if (coord) {
+    const from = E.sqIndex(coord[1]), to = E.sqIndex(coord[2]);
+    const promoMap = { q: 'q', d: 'q', r: 'r', t: 'r', b: 'b', l: 'b', n: 'n', s: 'n' };
+    const pr = coord[3] ? promoMap[coord[3]] : 'q';
+    const c = legal.filter(m => m.from === from && m.to === to);
+    return c.find(m => !m.promo || E.typeOf(m.promo) === pr) || null;
+  }
+  const tryOne = san => legal.find(m => E.cleanSAN(E.toSAN(s, m, legal)) === san) || null;
+  const en = raw.replace(/^[SLTDK]/, c => DE_TO_EN[c]).replace(/=([SLTD])$/, (x, c) => '=' + DE_TO_EN[c]);
+  return tryOne(en) || tryOne(raw) || null;
+}
+
+function pieceListing(s) {
+  const L = { w: [], b: [] };
+  const order = 'kqrbnp';
+  const items = [];
+  for (let i = 0; i < 64; i++) if (s.board[i]) items.push(i);
+  items.sort((a, b) => order.indexOf(E.typeOf(s.board[a])) - order.indexOf(E.typeOf(s.board[b])));
+  for (const i of items) {
+    const p = s.board[i];
+    L[E.colorOf(p)].push(`${NAME[E.typeOf(p)]} ${E.sqName(i)}`);
+  }
+  return `Weiß: ${L.w.join(', ')}\nSchwarz: ${L.b.join(', ')}`;
+}
+
+function moveListText(sans, first) {
+  first = first || E.parseFEN(E.START_FEN);
+  let out = '', num = first.full;
+  sans.forEach((san, k) => {
+    const white = (first.turn === 'w') === (k % 2 === 0);
+    if (white) out += `${num}. `;
+    else if (k === 0) out += `${num}… `;
+    out += de(san) + ' ';
+    if (!white) num++;
+  });
+  return out.trim() || '(noch keine Züge)';
+}
+
+function engineFacts(s, me) {
+  const lines = [];
+  const legal = E.legalMoves(s);
+  const side = s.turn === 'w' ? 'Weiß' : 'Schwarz';
+  lines.push(`Am Zug: ${side}${E.inCheck(s, s.turn) ? ' (steht im SCHACH)' : ''}`);
+  if (!legal.length) {
+    lines.push(E.inCheck(s, s.turn) ? 'Die Partie ist vorbei: Schachmatt.' : 'Die Partie ist vorbei: Patt.');
+    return lines.join('\n');
+  }
+  const top = E.analyzeAll(s, 2).slice(0, 4).map(r => ({ move: r.move, score: E.scoreMove(s, r.move, 3) }));
+  top.sort((a, b) => b.score - a.score);
+  const evWhite = s.turn === 'w' ? top[0].score : -top[0].score;
+  lines.push(`Engine-Bewertung der Stellung: ${fmtScore(evWhite)} aus Sicht von Weiß (positiv = Weiß besser)`);
+  lines.push(`Beste Züge für ${side} laut Engine (Tiefe 3), Bewertung aus Sicht von ${side}:`);
+  for (const r of top.slice(0, 3)) {
+    lines.push(`- ${de(E.toSAN(s, r.move, legal))} (${E.sqName(r.move.from)}→${E.sqName(r.move.to)}, ${fmtScore(r.score)}): ${joinReasons(explainMove(s, r.move))}`);
+  }
+  for (const color of ['w', 'b']) {
+    const th = threatSquares(s, color).danger;
+    if (th.length) lines.push(`Gefährdete Figuren von ${color === 'w' ? 'Weiß' : 'Schwarz'}: ${th.map(i => `${NAME[E.typeOf(s.board[i])]} ${E.sqName(i)}`).join(', ')}`);
+  }
+  const other = E.other(s.turn);
+  const th = describeThreat(s, other);
+  if (th) lines.push(`Drohung von ${other === 'w' ? 'Weiß' : 'Schwarz'} (falls nichts dagegen getan wird): ${th.text}`);
+  lines.push(`Alle legalen Züge für ${side}: ${legal.map(m => de(E.toSAN(s, m, legal))).join(' ')}`);
+  return lines.join('\n');
+}
+
+const plain = html => { const d = document.createElement('div'); d.innerHTML = html.replace(/<\/p>|<br>/g, '\n'); return d.textContent.trim(); };
+
+function buildContext() {
+  const parts = [];
+  if (mode === 'play') {
+    const s = curState();
+    parts.push(`MODUS: Partie gegen den Computer. Der Schüler spielt ${game.player === 'w' ? 'Weiß' : 'Schwarz'}, der Computer ${game.player === 'w' ? 'Schwarz' : 'Weiß'}.`);
+    if (game.lastOpening) parts.push(`Eröffnung: ${game.lastOpening}`);
+    parts.push(`Züge bisher: ${moveListText(game.sans)}`);
+    parts.push(`FEN: ${E.toFEN(s)}`);
+    parts.push(`Figuren:\n${pieceListing(s)}`);
+    parts.push(engineFacts(s, game.player));
+    parts.push(`Letzte Hinweise des automatischen Trainers:\n${plain($('coachMsg').innerHTML).slice(0, 1500)}`);
+  } else if (mode === 'openings' && lesson.o && !$('openingLesson').hidden) {
+    const o = lesson.o, s = lessonState();
+    parts.push(`MODUS: Eröffnungstraining „${o.name}“. Der Schüler spielt ${o.side === 'w' ? 'Weiß' : 'Schwarz'}.`);
+    parts.push(`Idee der Eröffnung: ${o.intro}\nMerksatz: ${o.summary}`);
+    parts.push(`Bisher gespielt, mit Erklärung:\n${o.moves.slice(0, lesson.idx).map((x, k) => `${Math.floor(k / 2) + 1}${k % 2 ? '…' : '.'} ${de(x[0])}: ${x[1]}`).join('\n') || '(noch nichts)'}`);
+    if (lesson.idx < o.moves.length) parts.push(`Nächster Zug der Lektion (NICHT direkt verraten, außer der Schüler fragt ausdrücklich nach dem Zug): ${de(o.moves[lesson.idx][0])} – ${o.moves[lesson.idx][1]}`);
+    else parts.push('Die Lektion ist abgeschlossen.');
+    parts.push(`FEN: ${E.toFEN(s)}`);
+    parts.push(`Figuren:\n${pieceListing(s)}`);
+    parts.push(engineFacts(s, o.side));
+  } else if (mode === 'puzzles' && puzzle.state && !$('puzzleView').hidden) {
+    const p = PUZZLES[puzzle.idx], s = puzzle.state;
+    parts.push(`MODUS: Taktik-Rätsel „${p.title}“. Aufgabe: ${p.goal}`);
+    parts.push(`Lösung (NICHT verraten! Gib nur schrittweise Hinweise, außer der Schüler bittet ausdrücklich um die Lösung): ${p.solution ? de(p.solution) : 'jeder Mattzug'} – ${p.explain}`);
+    parts.push(puzzle.solved ? 'Der Schüler hat das Rätsel bereits gelöst.' : 'Der Schüler hat es noch nicht gelöst.');
+    parts.push(`FEN: ${E.toFEN(s)}`);
+    parts.push(`Figuren:\n${pieceListing(s)}`);
+    parts.push(`Am Zug: ${s.turn === 'w' ? 'Weiß' : 'Schwarz'}`);
+  } else {
+    parts.push('MODUS: Der Schüler ist im Menü (keine konkrete Stellung). Beantworte allgemeine Schachfragen.');
+  }
+  return parts.join('\n\n');
+}
+
+const INSTRUCTIONS = `Du bist „Eule“, ein geduldiger, freundlicher Schachtrainer in einer Schach-Lern-App. Dein Schüler ist Anfänger und will richtig gut Schach spielen lernen.
+
+So antwortest du:
+- Auf Deutsch, in einfacher Sprache, konkret und ermutigend. Normalerweise 3–8 Sätze; wenn der Schüler eine genaue Erklärung möchte, auch ausführlicher.
+- Deutsche Notation: K = König, D = Dame, T = Turm, L = Läufer, S = Springer, Bauernzüge ohne Buchstaben (e4). Nenne Züge zusätzlich in Worten, z. B. „der Springer von g1 nach f3 (Sf3)“.
+- Erkläre immer das WARUM: Zentrum, Entwicklung, Königssicherheit, ungedeckte Figuren, Drohungen, Taktikmotive (Gabel, Fesselung, Spieß, Abzug), Pläne.
+- Schachstellungen im Kopf zu berechnen ist fehleranfällig. Stütze dich daher auf die ENGINE-DATEN unten. Erfinde keine Figuren, Felder oder Züge. Empfiehl nur legale Züge.
+- Wenn du einen Zug bewerten willst, der nicht in den Engine-Daten steht (z. B. einen Zug, den der Schüler vorschlägt), prüfe ihn vorher mit dem Werkzeug pruefe_zug.
+- Wenn du konkrete Züge erklärst, zeige sie mit dem Werkzeug zeige_pfeile auf dem Brett (höchstens 3 Pfeile).
+- Bewertungen: +1.0 bedeutet ungefähr einen Bauern Vorteil.
+- Formatierung: nur einfacher Text. **fett** ist erlaubt, Aufzählungen beginnen mit „- “. Keine Tabellen, keine Überschriften.`;
+
+const CHIPS = {
+  play: ['Erklär mir die Stellung', 'Was droht gerade?', 'Warum war mein letzter Zug gut oder schlecht?', 'Was ist jetzt ein guter Plan?', 'Erklär den letzten Zug des Computers'],
+  openings: ['Warum wird dieser Zug gespielt?', 'Was sind die Hauptideen dieser Eröffnung?', 'Welche typischen Fallen gibt es hier?', 'Was passiert, wenn der Gegner anders spielt?'],
+  puzzles: ['Gib mir einen kleinen Hinweis', 'Welches Muster ist das?', 'Erklär mir die Lösung genau'],
+  menu: ['Wie werde ich schnell besser?', 'Welche Eröffnung soll ich lernen?', 'Was ist eine Gabel?'],
+};
+
+function renderChips() {
+  const key = mode === 'openings' && !$('openingLesson').hidden ? 'openings'
+    : mode === 'puzzles' && !$('puzzleView').hidden ? 'puzzles'
+      : mode === 'play' ? 'play' : 'menu';
+  const box = $('chips');
+  box.innerHTML = '';
+  for (const q of CHIPS[key]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = q;
+    b.onclick = () => ask(q);
+    box.appendChild(b);
+  }
+}
+
+function escapeHtml(t) {
+  return t.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+function formatAnswer(text) {
+  const lines = escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').split('\n');
+  let html = '', inList = false;
+  for (const l of lines) {
+    const m = l.match(/^\s*[-•*]\s+(.*)$/);
+    if (m) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${m[1]}</li>`; continue; }
+    if (inList) { html += '</ul>'; inList = false; }
+    if (l.trim()) html += `<p>${l}</p>`;
+  }
+  if (inList) html += '</ul>';
+  return html;
+}
+
+function addMsg(role, html) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + role;
+  d.innerHTML = html;
+  $('chatLog').appendChild(d);
+  $('chatLog').scrollTop = $('chatLog').scrollHeight;
+  return d;
+}
+
+function currentBoardState() { return ui.ctx ? ui.ctx.state : E.parseFEN(E.START_FEN); }
+
+const CHAT_TOOLS = [
+  {
+    name: 'pruefe_zug',
+    description: 'Prüft einen Zug in der aktuellen Brettstellung mit der Schach-Engine (für die Seite, die am Zug ist). Akzeptiert deutsche (Sf3), englische (Nf3) oder Koordinaten-Notation (g1f3). Liefert, ob er legal ist, seine Bewertung, was er bewirkt, die beste Antwort des Gegners und den besten Zug zum Vergleich.',
+    inputSchema: { type: 'object', properties: { zug: { type: 'string', description: 'Der Zug, z. B. "Sf3", "exd5", "O-O" oder "e2e4"' } }, required: ['zug'] },
+    execute(input) {
+      const s = currentBoardState();
+      const m = parseUserMove(s, input.zug);
+      if (!m) throw new Error(`"${input.zug}" ist in dieser Stellung kein legaler Zug für ${s.turn === 'w' ? 'Weiß' : 'Schwarz'}.`);
+      const legal = E.legalMoves(s);
+      const best = E.bestMove(s, 3);
+      const sc = sameMove(best.move, m) ? best.score : E.scoreMove(s, m, 3);
+      const after = E.makeMove(s, m);
+      const reply = E.legalMoves(after).length ? E.bestMove(after, 3) : null;
+      return {
+        zug: de(E.toSAN(s, m, legal)),
+        von_nach: `${E.sqName(m.from)}→${E.sqName(m.to)}`,
+        bewertung_fuer_ziehende_seite: fmtScore(sc),
+        was_der_zug_bewirkt: explainMove(s, m),
+        beste_antwort_des_gegners: reply ? `${de(E.toSAN(after, reply.move))}: ${joinReasons(explainMove(after, reply.move))}` : (E.inCheck(after, after.turn) ? 'keine – Schachmatt' : 'keine – Patt'),
+        bester_zug_zum_vergleich: `${de(E.toSAN(s, best.move, legal))} (${fmtScore(best.score)}): ${joinReasons(explainMove(s, best.move))}`,
+        verlust_gegenueber_bestem_zug_in_bauern: Math.max(0, (best.score - sc) / 100).toFixed(1),
+      };
+    },
+  },
+  {
+    name: 'zeige_pfeile',
+    description: 'Zeichnet Pfeile auf das Schachbrett, die der Schüler sieht, z. B. um einen Zug oder eine Drohung zu zeigen. Felder in Koordinaten wie "g1" und "f3". Ersetzt vorherige Pfeile. Liefert "ok".',
+    inputSchema: {
+      type: 'object',
+      properties: { pfeile: { type: 'array', items: { type: 'object', properties: { von: { type: 'string' }, nach: { type: 'string' } }, required: ['von', 'nach'] }, maxItems: 3 } },
+      required: ['pfeile'],
+    },
+    execute(input) {
+      const list = Array.isArray(input.pfeile) ? input.pfeile.slice(0, 3) : [];
+      const ok = /^[a-h][1-8]$/;
+      ui.arrows = list
+        .map(a => ({ von: String(a && a.von || '').toLowerCase(), nach: String(a && a.nach || '').toLowerCase() }))
+        .filter(a => ok.test(a.von) && ok.test(a.nach) && a.von !== a.nach)
+        .map(a => ({ from: E.sqIndex(a.von), to: E.sqIndex(a.nach) }));
+      ui.hintFrom = -1;
+      render();
+      return 'ok';
+    },
+  },
+];
+
+async function ask(question) {
+  question = String(question || '').trim();
+  if (!question || !chat.sample || chat.busy) return;
+  $('askInput').value = '';
+  addMsg('user', escapeHtml(question));
+  const bubble = addMsg('bot thinking', 'Eule denkt nach …');
+  chat.busy = true;
+  $('askSend').disabled = true;
+  $('askStop').hidden = false;
+  $('askNote').textContent = '';
+  chat.ctl = new AbortController();
+  const input = [
+    { role: 'user', content: `${INSTRUCTIONS}\n\n===== AKTUELLE SITUATION / ENGINE-DATEN =====\n${buildContext()}` },
+    ...chat.turns.slice(-8),
+    { role: 'user', content: question },
+  ];
+  // Die Liste muss mit einer Nutzer-Nachricht beginnen; nach dem Anweisungsblock dürfen Nutzer-Turns direkt folgen.
+  const opts = {
+    signal: chat.ctl.signal,
+    cache: false,
+    modelTier: 'default',
+    effort: 'low',
+    onText: ({ text }) => { bubble.classList.remove('thinking'); bubble.innerHTML = formatAnswer(text); $('chatLog').scrollTop = $('chatLog').scrollHeight; },
+  };
+  if (chat.tools) { opts.tools = CHAT_TOOLS; delete opts.cache; }
+  try {
+    const { text, truncated } = await chat.sample(input, opts);
+    bubble.classList.remove('thinking');
+    bubble.innerHTML = formatAnswer(text);
+    chat.turns.push({ role: 'user', content: question }, { role: 'assistant', content: text });
+    if (truncated) $('askNote').textContent = 'Die Antwort wurde abgeschnitten – frag gern genauer nach.';
+  } catch (e) {
+    const code = e && e.code;
+    if (e && e.text) { bubble.classList.remove('thinking'); bubble.innerHTML = formatAnswer(e.text); }
+    else bubble.remove();
+    if (code === 'cancelled') { /* gestoppt */ }
+    else if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(code)) {
+      $('askNote').textContent = 'Die KI-Eule ist hier nicht erlaubt oder nicht verfügbar. Der normale Trainer funktioniert weiterhin.';
+      $('askForm').hidden = true; $('chips').hidden = true;
+    } else if (code === 'tools_unavailable') {
+      chat.tools = false;
+      $('askNote').textContent = 'Bitte frag nochmal – ich antworte jetzt ohne Brett-Werkzeuge.';
+    } else if (code === 'rate_limited') $('askNote').textContent = 'Gerade zu viele Fragen – warte kurz und versuch es dann nochmal.';
+    else if (code === 'session_expired') $('askNote').textContent = 'Bitte melde dich bei Claude neu an.';
+    else if (code === 'refused') $('askNote').textContent = 'Darauf kann ich nicht antworten. Frag gern etwas anderes zum Schach.';
+    else $('askNote').textContent = 'Da ist etwas schiefgegangen. Versuch es bitte nochmal.';
+  } finally {
+    chat.busy = false;
+    $('askSend').disabled = false;
+    $('askStop').hidden = true;
+  }
+}
+
+async function initChat() {
+  if (!window.claude || typeof window.claude.use !== 'function') return;
+  let sample = null;
+  try { sample = await window.claude.use('sample'); } catch (e) { sample = null; }
+  if (!sample) return;
+  chat.sample = sample;
+  try { const lim = await sample.limits(); chat.tools = !!(lim && lim.tools); } catch (e) { chat.tools = false; }
+  $('askForm').addEventListener('submit', ev => { ev.preventDefault(); ask($('askInput').value); });
+  $('askStop').onclick = () => chat.ctl && chat.ctl.abort();
+  updateAskBox();
+}
+
+function updateAskBox() {
+  $('askBox').hidden = !chat.sample || mode === 'tips';
+  if (chat.sample) renderChips();
+}
+
 // ===================== Tabs & Start =====================
 function showTab(tab) {
+  mode = tab;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   for (const t of ['play', 'openings', 'puzzles']) $('panel-' + t).hidden = t !== tab;
   $('panel-tips').hidden = tab !== 'tips';
@@ -784,6 +1157,7 @@ function showTab(tab) {
     renderPuzzleList();
     startPuzzlePreview();
   }
+  updateAskBox();
 }
 
 function startPuzzlePreview() {
@@ -834,7 +1208,28 @@ function init() {
     else showTab('puzzles');
   };
 
-  newGame();
+  // Laufende Partie über ein Neuladen der Seite retten
+  const hot = window.claude && window.claude.hot;
+  if (hot && hot.snapshot) {
+    try { hot.snapshot(() => ({ player: game.player, level: game.level, sans: game.sans.slice() })); } catch (e) { /* egal */ }
+  }
+  const start = data => {
+    if (data && Array.isArray(data.sans) && data.sans.length && (data.player === 'w' || data.player === 'b')) {
+      const states = [E.parseFEN(E.START_FEN)], moves = [], sans = [];
+      for (const san of data.sans) {
+        const st = states[states.length - 1];
+        const m = E.moveFromSAN(st, String(san));
+        if (!m) break;
+        sans.push(E.toSAN(st, m)); moves.push(m); states.push(E.makeMove(st, m));
+      }
+      if (data.level) $('levelSel').value = String(data.level);
+      $('colorSel').value = data.player;
+      newGame(states, moves, sans, data.player);
+    } else newGame();
+    initChat();
+  };
+  if (hot && typeof hot.ready === 'function') hot.ready(start);
+  else start(hot && hot.data ? hot.data : {});
 }
 
 init();

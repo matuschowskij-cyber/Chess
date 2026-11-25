@@ -317,6 +317,7 @@
     }
     if (bishopsW >= 2) score += 30;
     if (bishopsB >= 2) score -= 30;
+    score += structureWhite(b, end);
     // Im Endspiel den gegnerischen König an den Rand drängen
     if (end && Math.abs(matW - matB) >= 300) {
       const winner = matW > matB ? 'w' : 'b';
@@ -330,6 +331,74 @@
       }
     }
     return score;
+  }
+
+  // Bauernstruktur, Türme auf offenen Linien, Königsschutz (aus Sicht von Weiß)
+  const PASSED = [0, 10, 15, 25, 40, 65, 100, 0];
+  function pawnInfo(b) {
+    const files = { w: new Array(8).fill(0), b: new Array(8).fill(0) };
+    const pawns = { w: [], b: [] };
+    for (let i = 0; i < 64; i++) {
+      const p = b[i];
+      if (p === 'P') { files.w[i % 8]++; pawns.w.push(i); }
+      else if (p === 'p') { files.b[i % 8]++; pawns.b.push(i); }
+    }
+    return { files, pawns };
+  }
+  function isPassed(b, sq, color) {
+    const r = sq >> 3, c = sq % 8, enemy = color === 'w' ? 'p' : 'P';
+    for (let cc = Math.max(0, c - 1); cc <= Math.min(7, c + 1); cc++) {
+      if (color === 'w') { for (let rr = r - 1; rr >= 0; rr--) if (b[rr * 8 + cc] === enemy) return false; }
+      else { for (let rr = r + 1; rr < 8; rr++) if (b[rr * 8 + cc] === enemy) return false; }
+    }
+    return true;
+  }
+  function structureWhite(b, end) {
+    const { files, pawns } = pawnInfo(b);
+    let sc = 0;
+    for (const color of ['w', 'b']) {
+      const sign = color === 'w' ? 1 : -1;
+      const f = files[color];
+      for (let c = 0; c < 8; c++) {
+        if (f[c] > 1) sc -= sign * 15 * (f[c] - 1);
+        if (f[c] && !(c > 0 && f[c - 1]) && !(c < 7 && f[c + 1])) sc -= sign * 12 * f[c];
+      }
+      for (const sq of pawns[color]) {
+        if (isPassed(b, sq, color)) {
+          const adv = color === 'w' ? 7 - (sq >> 3) : (sq >> 3);
+          sc += sign * PASSED[adv] * (end ? 1.5 : 1);
+        }
+      }
+    }
+    for (let i = 0; i < 64; i++) {
+      const p = b[i];
+      if (!p) continue;
+      const t = typeOf(p), color = colorOf(p), sign = color === 'w' ? 1 : -1, c = i % 8;
+      if (t === 'r') {
+        if (!files.w[c] && !files.b[c]) sc += sign * 20;
+        else if (!files[color][c]) sc += sign * 10;
+      } else if (t === 'k' && !end) {
+        // Bauernschild vor dem König
+        const dir = color === 'w' ? -1 : 1, own = color === 'w' ? 'P' : 'p';
+        let shield = 0;
+        for (let cc = Math.max(0, c - 1); cc <= Math.min(7, c + 1); cc++) {
+          for (let k = 1; k <= 2; k++) {
+            const rr = (i >> 3) + dir * k;
+            if (rr >= 0 && rr < 8 && b[rr * 8 + cc] === own) { shield++; break; }
+          }
+        }
+        sc += sign * shield * 10;
+      }
+    }
+    return sc;
+  }
+
+  // Felder mit gegnerischen Figuren, die die Figur auf `sq` angreift
+  function attacksFrom(s, sq) {
+    const p = s.board[sq];
+    if (!p) return [];
+    const st = { ...s, turn: colorOf(p), ep: -1 };
+    return pseudoMoves(st, true).filter(m => m.from === sq && m.flag !== 'ep').map(m => m.to);
   }
 
   const evaluate = s => (s.turn === 'w' ? 1 : -1) * evaluateWhite(s);
@@ -414,6 +483,21 @@
     return { move: best, score: bestScore, nodes: ctx.nodes };
   }
 
+  // Genaue Bewertung eines einzelnen Zuges (aus Sicht des Ziehenden)
+  function scoreMove(s, m, depth) {
+    return -negamax(makeMove(s, m), depth - 1, -INF, INF, 1, { nodes: 0 });
+  }
+
+  // Beste Antwort, wenn die Seite `color` jetzt (noch einmal) ziehen dürfte: zeigt Drohungen
+  function threatOf(s, color, depth) {
+    if (inCheck(s, other(color))) return null;
+    const st = { ...s, turn: color, ep: -1 };
+    const base = evaluate(st);
+    const r = bestMove(st, depth || 2);
+    if (!r) return null;
+    return { move: r.move, gain: r.score - base, score: r.score, state: st };
+  }
+
   function insufficientMaterial(b) {
     const pieces = b.filter(p => p && typeOf(p) !== 'k');
     if (pieces.length === 0) return true;
@@ -423,7 +507,7 @@
 
   const Engine = {
     VALUE, MATE, START_FEN, parseFEN, toFEN, positionKey, legalMoves, makeMove, inCheck,
-    toSAN, cleanSAN, moveFromSAN, evaluateWhite, analyzeAll, bestMove, attackers, isAttacked,
+    toSAN, cleanSAN, moveFromSAN, evaluateWhite, analyzeAll, bestMove, scoreMove, threatOf, attacksFrom, isPassed, attackers, isAttacked,
     colorOf, typeOf, other, sqName, sqIndex, insufficientMaterial, kingSquare,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;

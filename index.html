@@ -124,6 +124,19 @@
           </div>
         </div>
       </section>
+      <!-- KI-Trainer -->
+      <section id="askBox" class="tab-panel ask" hidden>
+        <h3>🦉 Frag die Eule</h3>
+        <p class="small">Stell mir jede Frage zur Stellung, zu einem Zug oder zu Schach allgemein. Ich nutze die Schach-Engine, damit meine Antworten stimmen.</p>
+        <div id="chatLog" class="chatlog" aria-live="polite"></div>
+        <div id="chips" class="chips"></div>
+        <form id="askForm" class="askform">
+          <input id="askInput" type="text" placeholder="z. B. Warum ist Sc3 hier gut?" autocomplete="off">
+          <button id="askSend" class="primary" type="submit">Fragen</button>
+          <button id="askStop" type="button" hidden>Stopp</button>
+        </form>
+        <p id="askNote" class="small"></p>
+      </section>
     </aside>
 
     <section id="panel-tips" class="tips" hidden></section>
