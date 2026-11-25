@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Schach lernen</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1><span class="logo">♞&#xFE0E;</span> Schach lernen</h1>
+    <nav id="tabs">
+      <button data-tab="play" class="active">♟&#xFE0E; Spielen</button>
+      <button data-tab="openings">📖 Eröffnungen</button>
+      <button data-tab="puzzles">🧩 Rätsel</button>
+      <button data-tab="tips">💡 Tipps</button>
+    </nav>
+  </header>
+
+  <main id="main">
+    <div class="board-area" id="boardArea">
+      <div class="player-bar" id="topBar"></div>
+      <div class="board-wrap">
+        <div id="board"></div>
+        <svg id="arrows" viewBox="0 0 8 8" aria-hidden="true">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" class="arrowhead"/>
+            </marker>
+          </defs>
+          <g id="arrowLayer"></g>
+        </svg>
+        <div id="promo" class="promo" hidden></div>
+      </div>
+      <div class="player-bar" id="bottomBar"></div>
+    </div>
+
+    <aside class="panel">
+      <!-- Spielen -->
+      <section id="panel-play" class="tab-panel">
+        <div class="row settings">
+          <label>Farbe
+            <select id="colorSel">
+              <option value="w">Weiß</option>
+              <option value="b">Schwarz</option>
+              <option value="r">Zufall</option>
+            </select>
+          </label>
+          <label>Gegner
+            <select id="levelSel">
+              <option value="1">🐣 Anfänger</option>
+              <option value="2" selected>🙂 Fortgeschritten</option>
+              <option value="3">💪 Stark</option>
+              <option value="4">🧠 Meister</option>
+            </select>
+          </label>
+          <button id="newGameBtn" class="primary">Neues Spiel</button>
+        </div>
+
+        <div class="status" id="status"></div>
+
+        <div class="evalbox" title="Wer steht besser?">
+          <div class="evalbar"><div id="evalFill"></div></div>
+          <div id="evalText" class="small"></div>
+        </div>
+
+        <div class="coach">
+          <div class="coach-avatar">🦉</div>
+          <div class="coach-body">
+            <div class="coach-name">Trainer Eule <span id="openingName" class="opening-tag"></span></div>
+            <div id="coachMsg" class="coach-msg"></div>
+          </div>
+        </div>
+
+        <div class="row buttons">
+          <button id="hintBtn">💡 Tipp</button>
+          <button id="undoBtn">↶ Zurück</button>
+          <button id="flipBtn">⇅ Drehen</button>
+        </div>
+        <label class="check"><input type="checkbox" id="threatChk" checked> Gefahren &amp; Chancen auf dem Brett markieren</label>
+        <div class="legend small"><span class="lg danger"></span> deine Figur ist in Gefahr &nbsp; <span class="lg chance"></span> gegnerische Figur kann geschlagen werden</div>
+
+        <h3>Züge</h3>
+        <div id="moveList" class="movelist"></div>
+
+        <div class="tod"><b>Tipp:</b> <span id="tipOfDay"></span></div>
+      </section>
+
+      <!-- Eröffnungen -->
+      <section id="panel-openings" class="tab-panel" hidden>
+        <div id="openingList" class="card-list"></div>
+        <div id="openingLesson" hidden>
+          <button id="openingBack" class="link">← Alle Eröffnungen</button>
+          <h2 id="olTitle"></h2>
+          <p id="olIntro" class="small"></p>
+          <div class="coach">
+            <div class="coach-avatar">🦉</div>
+            <div class="coach-body"><div id="olMsg" class="coach-msg"></div></div>
+          </div>
+          <div class="row buttons">
+            <button id="olHint">💡 Zug zeigen</button>
+            <button id="olRestart">↺ Nochmal</button>
+            <button id="olPlay" class="primary" hidden>▶ Weiterspielen gegen Computer</button>
+          </div>
+          <ol id="olSteps" class="steps"></ol>
+        </div>
+      </section>
+
+      <!-- Rätsel -->
+      <section id="panel-puzzles" class="tab-panel" hidden>
+        <div id="puzzleList" class="card-list"></div>
+        <div id="puzzleView" hidden>
+          <button id="puzzleBack" class="link">← Alle Rätsel</button>
+          <h2 id="pzTitle"></h2>
+          <p id="pzGoal" class="goal"></p>
+          <div class="coach">
+            <div class="coach-avatar">🦉</div>
+            <div class="coach-body"><div id="pzMsg" class="coach-msg"></div></div>
+          </div>
+          <div class="row buttons">
+            <button id="pzHint">💡 Hinweis</button>
+            <button id="pzSolve">👁 Lösung</button>
+            <button id="pzNext" class="primary">Nächstes ›</button>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <section id="panel-tips" class="tips" hidden></section>
+  </main>
+
+  <script src="engine.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
