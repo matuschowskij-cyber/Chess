@@ -32,6 +32,11 @@ const OPENING_NAMES = [
 ];
 for (const o of OPENINGS) OPENING_NAMES.push([o.moves.map(m => m[0]).join(' '), o.name]);
 
+function isBookLine(sans) {
+  const line = sans.map(E.cleanSAN).join(' ');
+  return OPENING_NAMES.some(([seq]) => seq === line || seq.startsWith(line + ' '));
+}
+
 function openingNameFor(sans) {
   const line = sans.map(E.cleanSAN).join(' ');
   let best = null, len = 0;
@@ -45,7 +50,7 @@ function openingNameFor(sans) {
 const ui = {
   orientation: 'w', selected: -1, targets: [], legal: [],
   ctx: null, // aktueller Brett-Kontext (Spiel, Eröffnung, Rätsel)
-  arrows: [], hintFrom: -1, busy: false,
+  arrows: [], hintFrom: -1, busy: false, mark: null,
 };
 
 function setContext(ctx) {
@@ -92,6 +97,7 @@ function render() {
     if (ui.selected === i) sq.classList.add('sel');
     if (ui.hintFrom === i) sq.classList.add('hintfrom');
     if (i === checkSq) sq.classList.add('check');
+    if (ui.mark && ui.mark.sq === i) sq.classList.add(ui.mark.cls);
     if (th.danger.includes(i)) { sq.classList.add('danger'); sq.title = 'Achtung: Diese Figur ist in Gefahr!'; }
     if (th.chance.includes(i)) { sq.classList.add('chance'); sq.title = 'Diese gegnerische Figur kannst du vielleicht gewinnen!'; }
     const p = s.board[i];
@@ -137,6 +143,7 @@ function drawArrows() {
 }
 
 // Geschlagene Figuren und Materialvorteil
+// Spielerkarten über und unter dem Brett: Name, geschlagene Figuren, Materialvorteil
 function renderBars() {
   const ctx = ui.ctx;
   const s = ctx.state;
@@ -149,24 +156,33 @@ function renderBars() {
     count[c][t]++;
     mat += (c === 'w' ? 1 : -1) * E.VALUE[t];
   }
-  const capturedBy = color => { // Figuren, die `color` geschlagen hat
+  const capturedBy = color => {
     const opp = E.other(color);
     let out = '';
-    for (const t of ['q', 'r', 'b', 'n', 'p']) {
-      const n = Math.max(0, start[t] - count[opp][t]);
-      out += (GLYPH[t] + VS).repeat(n);
-    }
+    for (const t of ['q', 'r', 'b', 'n', 'p']) out += (GLYPH[t] + VS).repeat(Math.max(0, start[t] - count[opp][t]));
     return out;
   };
-  const label = color => {
-    const who = ctx.labels ? ctx.labels[color] : (color === 'w' ? 'Weiß' : 'Schwarz');
+  const card = color => {
+    const info = (ctx.players && ctx.players[color]) || { name: color === 'w' ? 'Weiß' : 'Schwarz', sub: '' };
     const adv = color === 'w' ? mat : -mat;
+    if (ctx.noCaps) return `<div class="av ${color}v">${GLYPH.k}${VS}</div><div class="who"><span class="nm">${info.name}</span><span class="sub">${info.sub || (color === 'w' ? 'Weiß' : 'Schwarz')}</span></div>${s.turn === color ? '<span class="turn-dot"></span>' : ''}`;
     const advStr = adv > 0 ? `<span class="adv">+${Math.round(adv / 100)}</span>` : '';
-    return `<span>${who}</span><span class="caps">${capturedBy(color)}${advStr}</span>`;
+    const dot = s.turn === color ? '<span class="turn-dot" title="am Zug"></span>' : '';
+    return `<div class="av ${color}v">${GLYPH.k}${VS}</div>
+      <div class="who"><span class="nm">${info.name}</span><span class="sub">${info.sub || (color === 'w' ? 'Weiß' : 'Schwarz')}</span></div>${dot}
+      <span class="caps">${capturedBy(color)}${advStr}</span>`;
   };
   const top = ui.orientation === 'w' ? 'b' : 'w';
-  $('topBar').innerHTML = label(top);
-  $('bottomBar').innerHTML = label(E.other(top));
+  $('topBar').innerHTML = card(top);
+  $('bottomBar').innerHTML = card(E.other(top));
+}
+
+function showToast(text, ms) {
+  const t = $('toast');
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => { t.hidden = true; }, ms || 1300);
 }
 
 async function onSquare(i) {
@@ -218,46 +234,66 @@ function shakeBoard() {
 }
 
 // ===================== Spiel gegen Computer =====================
+const LEVELS = { 0: 'Beide Seiten selbst', 1: 'Anfänger', 2: 'Fortgeschritten', 3: 'Stark', 4: 'Meister' };
+const settings = { color: 'w', level: 2, board: 'green' };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('schach-settings') || '{}')); } catch (e) { /* egal */ }
+function saveSettings() { try { localStorage.setItem('schach-settings', JSON.stringify(settings)); } catch (e) { /* egal */ } }
+function applyBoardTheme() { document.querySelector('.board-wrap').dataset.board = settings.board; }
+
 const game = {
-  states: [], moves: [], sans: [], player: 'w', level: 2, over: false, hintStep: 0, lastOpening: null,
+  states: [], moves: [], sans: [], quals: [], player: 'w', level: 2, over: false, hintStep: 0, lastOpening: null, lastQuality: null,
 };
+const twoPlayer = () => game.level === 0;
+const curState = () => game.states[game.states.length - 1];
+const myColor = () => (twoPlayer() ? curState().turn : game.player);
 
-function setCoach(html) { $('coachMsg').innerHTML = html; }
+const tidy = h => h.replace(/!\./g, '!').replace(/\.\./g, '.');
+function setCoach(html) { $('coachMsg').innerHTML = tidy(html); }
+function appendCoach(html) { $('coachMsg').insertAdjacentHTML('beforeend', tidy(html)); }
 
-function newGame(fromStates, fromMoves, fromSans, playerColor) {
-  let col = playerColor || $('colorSel').value;
+function newGame(fromStates, fromMoves, fromSans, playerColor, level) {
+  let col = playerColor || settings.color;
   if (col === 'r') col = Math.random() < 0.5 ? 'w' : 'b';
   game.player = col;
-  game.level = parseInt($('levelSel').value, 10);
+  game.level = level !== undefined ? level : settings.level;
   game.states = fromStates ? fromStates.slice() : [E.parseFEN(E.START_FEN)];
   game.moves = fromMoves ? fromMoves.slice() : [];
   game.sans = fromSans ? fromSans.slice() : [];
+  game.quals = new Array(game.sans.length).fill(null);
   game.over = false; game.hintStep = 0;
   game.lastOpening = openingNameFor(game.sans);
   chat.turns = [];
   $('chatLog').innerHTML = '';
   ui.orientation = col;
   setContext(playContext());
+  $('playTitle').textContent = twoPlayer() ? 'Analysebrett' : `Gegen Computer · ${LEVELS[game.level]}`;
   $('openingName').textContent = game.lastOpening || '';
-  setCoach(fromStates
-    ? '<p>Weiter geht’s! Spiel die Partie aus dieser Stellung gegen mich weiter.</p>'
-    : `<p>Hallo! Ich bin dein Trainer. Du spielst <b>${col === 'w' ? 'Weiß' : 'Schwarz'}</b>. Nach jedem Zug sage ich dir, wie gut er war.</p>
-       <p class="small">Klicke auf eine Figur, dann auf das Zielfeld. Mit „💡 Tipp“ helfe ich dir.</p>`);
+  let intro;
+  if (fromStates) intro = '<p>Weiter geht’s! Spiel die Partie aus dieser Stellung weiter.</p>';
+  else if (twoPlayer()) intro = '<p>Du ziehst <b>beide Seiten</b>. Ich bewerte jeden Zug – für Weiß und für Schwarz. Ideal, um auszuprobieren, wie man als Schwarz auf weiße Züge reagiert.</p><p class="small">Mit „⇅ Drehen“ kannst du das Brett aus der Sicht von Schwarz sehen.</p>';
+  else if (col === 'b') intro = `<p>Du spielst <b>Schwarz</b>. Weiß zieht zuerst – dein Job ist es, gut zu <b>reagieren</b>.</p>
+    <p class="small">Faustregeln: Gegen 1.e4 sind e5, c5, e6 oder c6 gute Antworten, gegen 1.d4 sind d5 oder Sf6 gut. Frag dich nach jedem weißen Zug: Was droht er? Dann entwickle deine Figuren und rochiere.</p>`;
+  else intro = `<p>Du spielst <b>Weiß</b> und ziehst zuerst. Nach jedem Zug sage ich dir, wie gut er war.</p>
+    <p class="small">Klicke auf eine Figur und dann auf das Zielfeld. Mit „💡 Tipp“ helfe ich dir.</p>`;
+  setCoach(intro);
   $('tipOfDay').textContent = pick(TIPS_OF_THE_DAY);
+  showSub('coach');
   updatePlayUI();
-  if (curState().turn !== game.player) later(computerMove, 400);
+  if (!twoPlayer() && curState().turn !== game.player) later(computerMove, 500);
 }
-
-const curState = () => game.states[game.states.length - 1];
 
 function playContext() {
   return {
     get state() { return curState(); },
     get lastMove() { return game.moves[game.moves.length - 1] || null; },
-    get me() { return game.player; },
-    get labels() { return { [game.player]: 'Du', [E.other(game.player)]: 'Computer' }; },
+    get me() { return myColor(); },
+    get players() {
+      if (twoPlayer()) return { w: { name: 'Weiß', sub: 'du' }, b: { name: 'Schwarz', sub: 'du' } };
+      const c = E.other(game.player);
+      return { [game.player]: { name: 'Du', sub: game.player === 'w' ? 'Weiß' : 'Schwarz' }, [c]: { name: 'Computer', sub: `${LEVELS[game.level]} · ${c === 'w' ? 'Weiß' : 'Schwarz'}` } };
+    },
     showThreats: () => $('threatChk').checked && !game.over,
-    canMove: () => !game.over && curState().turn === game.player,
+    canMove: () => !game.over && (twoPlayer() || curState().turn === game.player),
     onMove: playerMove,
   };
 }
@@ -268,8 +304,11 @@ function pushMove(m) {
   game.states.push(E.makeMove(s, m));
   game.moves.push(m);
   game.sans.push(san);
+  game.quals.push(null);
   return san;
 }
+
+const QBADGE = { book: ['q-book', '📖', ''], best: ['q-best', '★', '★ Bester Zug!'], good: ['q-good', '✓', ''], inaccurate: ['q-inacc', '?!', ''], mistake: ['q-mist', '?', '? Fehler'], blunder: ['q-blund', '??', '?? Grober Fehler'] };
 
 function playerMove(m) {
   const before = curState();
@@ -279,17 +318,31 @@ function playerMove(m) {
   render();
   updatePlayUI();
   ui.busy = true;
-  setStatus('Trainer denkt nach', true);
+  setStatus('Trainer bewertet deinen Zug', true);
   later(() => {
+    game.lastQuality = 'best';
     const fb = coachFeedback(before, m, histBefore);
+    game.quals[game.quals.length - 1] = game.lastQuality;
     setCoach(fb);
+    showSub('coach');
+    const toast = QBADGE[game.lastQuality] && QBADGE[game.lastQuality][2];
+    if (toast) showToast(toast, 1100);
     ui.busy = false;
-    if (!checkGameOver()) later(computerMove, 350);
+    if (!checkGameOver()) {
+      if (twoPlayer()) {
+        const s = curState();
+        const th = describeThreat(s, E.other(s.turn));
+        if (th) appendCoach(`<p class="warn">⚠ Jetzt ist ${s.turn === 'w' ? 'Weiß' : 'Schwarz'} am Zug. Achtung, Drohung: ${th.text}.</p>`);
+        else appendCoach(`<p class="small">Jetzt ist <b>${s.turn === 'w' ? 'Weiß' : 'Schwarz'}</b> am Zug.</p>`);
+        render();
+      } else later(computerMove, 350);
+    }
+    updatePlayUI();
   }, 30);
 }
 
 function computerMove() {
-  if (game.over || curState().turn === game.player) return;
+  if (game.over || twoPlayer() || curState().turn === game.player) return;
   ui.busy = true;
   setStatus('Computer denkt nach', true);
   later(() => {
@@ -314,10 +367,8 @@ function computerMove() {
   }, 60);
 }
 
-function appendCoach(html) { $('coachMsg').insertAdjacentHTML('beforeend', html); }
-
 function bookMove(s) {
-  if (game.sans.length > 14) return null;
+  if (game.sans.length > 16) return null;
   const line = game.sans.map(E.cleanSAN);
   const cands = [];
   for (const o of OPENINGS) {
@@ -462,6 +513,9 @@ function coachFeedback(before, m, prevMoves) {
   else if (loss <= 130) quality = 'inaccurate';
   else if (loss <= 300) quality = 'mistake';
   else quality = 'blunder';
+  const book = mode === 'play' && quality !== 'best' && isBookLine(game.sans);
+  if (book) quality = 'book';
+  game.lastQuality = quality;
 
   const mineWhy = joinReasons(explainMove(before, m));
   const bestWhy = joinReasons(explainMove(before, best.move));
@@ -478,14 +532,15 @@ function coachFeedback(before, m, prevMoves) {
 
   const praise = ['Sehr gut!', 'Stark!', 'Top-Zug!', 'Genau richtig!', 'Prima!'];
   const evalLine = `<p class="small">Bewertung für dich: ${fmtScore(best.score)} möglich, nach deinem Zug ${fmtScore(myScore)}${loss > 15 ? ` (Verlust ${(loss / 100).toFixed(1)} Bauern)` : ''}.</p>`;
-  if (quality === 'best') parts.push(`<p class="good">⭐ ${de(san)} – ${pick(praise)} Das ist der beste Zug.</p><p>Dein Zug ${mineWhy}.</p>`);
+  if (quality === 'book') parts.push(`<p class="good">📖 ${de(san)} – Theoriezug!</p><p>Genau so spielt man das in der <b>${openingNameFor(game.sans) || 'Eröffnung'}</b>. Dein Zug ${mineWhy}.</p>`);
+  else if (quality === 'best') parts.push(`<p class="good">⭐ ${de(san)} – ${pick(praise)} Das ist der beste Zug.</p><p>Dein Zug ${mineWhy}.</p>`);
   else if (quality === 'good') parts.push(`<p class="good">👍 ${de(san)} – Guter Zug.</p><p>Dein Zug ${mineWhy}. Noch etwas besser war <b>${bestSan}</b> (${bestWhy}).</p>`);
   else if (quality === 'inaccurate') parts.push(`<p class="warn">🤔 ${de(san)} – Etwas ungenau.</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p>`);
   else if (quality === 'mistake') parts.push(`<p class="warn">❗ ${de(san)} – Ein Fehler.</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p>`);
   else parts.push(`<p class="bad">❌ ${de(san)} – Grober Fehler!</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p><p class="small">Tipp: Mit „↶ Zurück“ kannst du den Zug zurücknehmen.</p>`);
   parts.push(evalLine);
 
-  if (quality === 'best' || quality === 'good' || quality === 'inaccurate') {
+  if (quality === 'best' || quality === 'good' || quality === 'inaccurate' || quality === 'book') {
     const tip = principleTip(before, m, prevMoves, me);
     if (tip) parts.push(`<p class="small">💬 ${tip}</p>`);
   }
@@ -523,21 +578,27 @@ function principleTip(before, m, prevMoves, me) {
 function checkGameOver() {
   const s = curState();
   const legal = E.legalMoves(s);
-  let msg = null;
+  let msg = null, toast = null;
+  const side = c => (c === 'w' ? 'Weiß' : 'Schwarz');
   if (!legal.length) {
-    if (E.inCheck(s, s.turn)) msg = s.turn === game.player
-      ? '<p class="bad">Schachmatt – der Computer hat gewonnen.</p><p class="small">Nicht schlimm! Nimm Züge zurück und schau, wo es schiefging, oder starte ein neues Spiel.</p>'
-      : '<p class="good">♛ Schachmatt! Du hast gewonnen – großartig!</p>';
-    else msg = '<p class="warn">Patt – Remis! Wer am Zug ist, hat keinen legalen Zug, steht aber nicht im Schach.</p>';
-  } else if (E.insufficientMaterial(s.board)) msg = '<p class="warn">Remis – niemand hat mehr genug Material, um Matt zu setzen.</p>';
-  else if (s.half >= 100) msg = '<p class="warn">Remis durch die 50-Züge-Regel.</p>';
+    if (E.inCheck(s, s.turn)) {
+      if (twoPlayer()) { msg = `<p class="good">♛ Schachmatt! ${side(E.other(s.turn))} gewinnt.</p>`; toast = 'Schachmatt!'; }
+      else if (s.turn === game.player) { msg = '<p class="bad">Schachmatt – der Computer hat gewonnen.</p><p class="small">Nicht schlimm! Nimm Züge zurück und schau im Tab „Züge“, wo die roten Markierungen sind – dort ging es schief.</p>'; toast = 'Verloren'; }
+      else { msg = '<p class="good">♛ Schachmatt! Du hast gewonnen – großartig!</p>'; toast = '🏆 Gewonnen!'; }
+    } else { msg = '<p class="warn">Patt – Remis! Wer am Zug ist, hat keinen legalen Zug, steht aber nicht im Schach.</p>'; toast = 'Patt – Remis'; }
+  } else if (E.insufficientMaterial(s.board)) { msg = '<p class="warn">Remis – niemand hat mehr genug Material, um Matt zu setzen.</p>'; toast = 'Remis'; }
+  else if (s.half >= 100) { msg = '<p class="warn">Remis durch die 50-Züge-Regel.</p>'; toast = 'Remis'; }
   else {
     const key = E.positionKey(s);
-    if (game.states.filter(x => E.positionKey(x) === key).length >= 3) msg = '<p class="warn">Remis durch dreifache Stellungswiederholung.</p>';
+    if (game.states.filter(x => E.positionKey(x) === key).length >= 3) { msg = '<p class="warn">Remis durch dreifache Stellungswiederholung.</p>'; toast = 'Remis'; }
   }
   if (msg) {
     game.over = true;
-    setCoach(msg);
+    const q = game.quals.filter(Boolean);
+    const cnt = k => q.filter(x => x === k).length;
+    const summary = q.length ? `<p class="small">Deine Partie: ${cnt('best')}× ★ bester Zug, ${cnt('good')}× ✓ gut, ${cnt('inaccurate')}× ungenau, ${cnt('mistake')}× Fehler, ${cnt('blunder')}× grober Fehler.</p>` : '';
+    appendCoach(msg + summary + '<p class="small">Mit „＋ Neu“ startest du ein neues Spiel.</p>');
+    if (toast) showToast(toast, 2200);
     render();
     updatePlayUI();
     return true;
@@ -545,39 +606,41 @@ function checkGameOver() {
   return false;
 }
 
-function setStatus(text, thinking) {
+function setStatus(text, thinking, mine) {
   const el = $('status');
   el.textContent = text;
   el.classList.toggle('thinking', !!thinking);
+  el.classList.toggle('mine', !!mine);
 }
 
 function updatePlayUI() {
   const s = curState();
+  const side = s.turn === 'w' ? 'Weiß' : 'Schwarz';
   if (game.over) setStatus('Spiel beendet');
-  else if (s.turn === game.player) setStatus(E.inCheck(s, s.turn) ? 'Du bist am Zug – Schach!' : 'Du bist am Zug');
-  else setStatus('Computer ist am Zug', true);
+  else if (twoPlayer()) setStatus(`${side} ist am Zug${E.inCheck(s, s.turn) ? ' – Schach!' : ''}`, false, true);
+  else if (s.turn === game.player) setStatus(E.inCheck(s, s.turn) ? 'Du bist am Zug – Schach!' : 'Du bist am Zug', false, true);
+  else setStatus('Computer denkt nach', true);
 
-  // Zugliste
+  // Zugliste mit Bewertungssymbolen
   const list = $('moveList');
-  list.innerHTML = '';
+  let html = '';
   const first = game.states[0];
-  let ply = 0;
   let num = first.full;
-  if (first.turn === 'b' && game.sans.length) {
-    list.insertAdjacentHTML('beforeend', `<span class="n">${num}.</span><span>…</span>`);
-  }
-  for (let k = 0; k < game.sans.length; k++) {
-    const color = (first.turn === 'w') === (k % 2 === 0) ? 'w' : 'b';
-    if (color === 'w') list.insertAdjacentHTML('beforeend', `<span class="n">${num}.</span>`);
-    const cls = k === game.sans.length - 1 ? 'cur' : '';
-    list.insertAdjacentHTML('beforeend', `<span class="${cls}">${de(game.sans[k])}</span>`);
-    if (color === 'b') num++;
-    ply++;
-  }
-  list.scrollTop = list.scrollHeight;
+  if (!game.sans.length) html = '<span></span><span class="small" style="grid-column: span 2">Noch keine Züge.</span>';
+  if (first.turn === 'b' && game.sans.length) html += `<span class="n">${num}.</span><span class="mv">…</span>`;
+  game.sans.forEach((san, k) => {
+    const white = (first.turn === 'w') === (k % 2 === 0);
+    if (white) html += `<span class="n">${num}.</span>`;
+    const q = game.quals[k] && QBADGE[game.quals[k]];
+    const badge = q ? `<span class="q ${q[0]}">${q[1]}</span>` : '';
+    html += `<span class="mv ${k === game.sans.length - 1 ? 'cur' : ''}">${de(san)}${badge}</span>`;
+    if (!white) num++;
+  });
+  list.innerHTML = html;
+  list.parentElement.scrollTop = list.parentElement.scrollHeight;
 
-  $('undoBtn').disabled = game.moves.length === 0;
-  $('hintBtn').disabled = game.over || s.turn !== game.player;
+  $('undoBtn').disabled = game.moves.length === 0 || ui.busy;
+  $('hintBtn').disabled = game.over || !playContext().canMove();
   updateEval();
 }
 
@@ -592,42 +655,49 @@ function updateEval() {
     white = r ? (s.turn === 'w' ? r.score : -r.score) : 0;
   }
   const pct = Math.max(3, Math.min(97, 50 + 50 * Math.tanh(white / 600)));
-  $('evalFill').style.width = pct + '%';
+  $('evalFill').style.height = pct + '%';
+  $('evalV').classList.toggle('flipped', ui.orientation === 'b');
+  const mate = Math.abs(white) > E.MATE - 100;
+  $('evalNum').textContent = mate ? 'M' : (Math.abs(white) / 100).toFixed(1);
+  $('evalNum').style.color = white >= 0 ? '#403d39' : '#f4f2ec';
+  $('evalNum').style.bottom = white >= 0 ? '2px' : 'auto';
+  $('evalNum').style.top = white >= 0 ? 'auto' : '2px';
   let txt;
-  if (Math.abs(white) > E.MATE - 100) txt = white > 0 ? 'Weiß setzt bald matt' : 'Schwarz setzt bald matt';
-  else if (Math.abs(white) < 60) txt = 'Ausgeglichen';
+  if (mate) txt = white > 0 ? 'Weiß setzt bald matt' : 'Schwarz setzt bald matt';
+  else if (Math.abs(white) < 60) txt = 'Die Stellung ist ausgeglichen';
   else {
-    const side = white > 0 ? 'Weiß' : 'Schwarz';
     const v = Math.abs(white);
-    txt = `${side} ${v < 150 ? 'steht etwas besser' : v < 400 ? 'steht besser' : 'steht klar besser'} (${(white > 0 ? '+' : '−') + (v / 100).toFixed(1)})`;
+    txt = `${white > 0 ? 'Weiß' : 'Schwarz'} ${v < 150 ? 'steht etwas besser' : v < 400 ? 'steht besser' : 'steht klar besser'} (${(white > 0 ? '+' : '−') + (v / 100).toFixed(1)})`;
   }
-  $('evalText').textContent = txt;
+  $('evalText').textContent = '📊 ' + txt;
 }
 
 function undo() {
   if (!game.moves.length || ui.busy) return;
-  do {
-    game.states.pop(); game.moves.pop(); game.sans.pop();
-  } while (game.moves.length && curState().turn !== game.player);
-  if (curState().turn !== game.player) { // Computer hatte angefangen
-    game.over = false;
-    render(); updatePlayUI();
-    later(computerMove, 300);
-    return;
+  const pop = () => { game.states.pop(); game.moves.pop(); game.sans.pop(); game.quals.pop(); };
+  if (twoPlayer()) pop();
+  else {
+    do { pop(); } while (game.moves.length && curState().turn !== game.player);
   }
   game.over = false; game.hintStep = 0;
   game.lastOpening = openingNameFor(game.sans);
   $('openingName').textContent = game.lastOpening || '';
-  setCoach('<p>Zug zurückgenommen. Versuch es noch einmal – denk daran: Was kann der Gegner nach deinem Zug machen?</p>');
   ui.selected = -1; ui.targets = []; ui.arrows = []; ui.hintFrom = -1;
+  if (!twoPlayer() && curState().turn !== game.player) {
+    render(); updatePlayUI();
+    later(computerMove, 300);
+    return;
+  }
+  setCoach('<p>Zug zurückgenommen. Versuch es noch einmal – denk daran: Was kann der Gegner nach deinem Zug machen?</p>');
   render(); updatePlayUI();
 }
 
 function hint() {
-  if (game.over || ui.busy || curState().turn !== game.player) return;
+  if (game.over || ui.busy || !playContext().canMove()) return;
   const s = curState();
   setStatus('Trainer sucht einen guten Zug', true);
   ui.busy = true;
+  showSub('coach');
   later(() => {
     const r = E.bestMove(s, 3);
     ui.busy = false;
@@ -638,7 +708,7 @@ function hint() {
     if (game.hintStep === 0) {
       ui.hintFrom = m.from; ui.arrows = [];
       game.hintStep = 1;
-      let txt = `Schau dir ${t === 'q' ? 'deine' : 'deinen'} <b>${NAME[t]}</b> auf ${E.sqName(m.from)} an (blau markiert). Wohin könnte ${t === 'q' ? 'sie' : 'er'} ziehen?`;
+      let txt = `Schau dir ${t === 'q' ? 'die' : 'den'} <b>${NAME[t]}</b> auf ${E.sqName(m.from)} an (orange markiert). Wohin könnte ${t === 'q' ? 'sie' : 'er'} ziehen?`;
       if (r.score > E.MATE - 100) txt = 'Hier gibt es ein Matt! ' + txt;
       appendCoach(`<p>💡 ${txt} <span class="small">Drück nochmal auf Tipp für die Lösung.</span></p>`);
     } else {
@@ -653,16 +723,26 @@ function hint() {
   }, 30);
 }
 
+function showSub(name) {
+  document.querySelectorAll('.subtabs button').forEach(b => b.classList.toggle('active', b.dataset.sub === name));
+  for (const n of ['coach', 'moves', 'ask']) $('sub-' + n).hidden = n !== name;
+  if (name === 'ask') setTimeout(() => $('askInput').focus(), 50);
+}
+
 // ===================== Eröffnungen =====================
-const lesson = { o: null, idx: 0, states: [], moves: [], sans: [], timer: null, done: false };
+const lesson = { o: null, idx: 0, states: [], moves: [], sans: [], timer: null, done: false, filter: 'all' };
 
 function renderOpeningList() {
   const list = $('openingList');
-  list.innerHTML = '<p class="small">Wähle eine Eröffnung. Ich zeige dir jeden Zug und erkläre, warum er gespielt wird. Deine Züge spielst du selbst!</p>';
+  list.innerHTML = '';
   for (const o of OPENINGS) {
+    if (lesson.filter !== 'all' && o.side !== lesson.filter) continue;
     const btn = document.createElement('button');
     btn.className = 'card';
-    btn.innerHTML = `<span><span class="t">${o.name}</span><br><span class="s">Du spielst ${o.side === 'w' ? 'Weiß' : 'Schwarz'} · ${de(o.moves.slice(0, 4).map((m, k) => (k % 2 ? '' : (k / 2 + 1) + '.') + m[0]).join(' '))} …</span></span><span class="badge">${o.level}</span>`;
+    const preview = de(o.moves.slice(0, 4).map((m, k) => (k % 2 ? '' : (k / 2 + 1) + '.') + m[0]).join(' '));
+    btn.innerHTML = `<span class="ci ${o.side}">${GLYPH.k}${VS}</span>
+      <span class="cb"><span class="t">${o.name}</span><span class="s">Du spielst ${o.side === 'w' ? 'Weiß' : 'Schwarz'} · ${preview} …</span></span>
+      <span class="badge">${o.level}</span>`;
     btn.onclick = () => startLesson(o);
     list.appendChild(btn);
   }
@@ -671,9 +751,10 @@ function renderOpeningList() {
 function startLesson(o) {
   clearTimeout(lesson.timer);
   Object.assign(lesson, { o, idx: 0, states: [E.parseFEN(E.START_FEN)], moves: [], sans: [], done: false });
-  $('openingList').hidden = true;
+  $('openingListView').hidden = true;
   $('openingLesson').hidden = false;
   $('olTitle').textContent = o.name;
+  $('olSide').textContent = `Du spielst ${o.side === 'w' ? 'Weiß' : 'Schwarz'} · ${o.level}`;
   $('olIntro').textContent = o.intro;
   $('olPlay').hidden = true;
   $('olHint').disabled = false;
@@ -682,7 +763,7 @@ function startLesson(o) {
     get state() { return lesson.states[lesson.states.length - 1]; },
     get lastMove() { return lesson.moves[lesson.moves.length - 1] || null; },
     me: o.side,
-    labels: { [o.side]: 'Du', [E.other(o.side)]: 'Gegner' },
+    players: { [o.side]: { name: 'Du' }, [E.other(o.side)]: { name: 'Gegner' } },
     showThreats: () => false,
     canMove: () => !lesson.done && lessonState().turn === o.side,
     onMove: lessonMove,
@@ -709,9 +790,10 @@ function lessonAdvance() {
   const o = lesson.o;
   if (lesson.idx >= o.moves.length) {
     lesson.done = true;
-    $('olMsg').innerHTML = `<p class="good">🎉 Geschafft! Du kennst jetzt die ${o.name}.</p><p>${o.summary}</p>`;
+    $('olMsg').innerHTML = `<p class="good">🎉 Geschafft! Du kennst jetzt: ${o.name}.</p><p>${o.summary}</p>`;
     $('olPlay').hidden = false;
     $('olHint').disabled = true;
+    showToast('🎉 Lektion geschafft!', 1600);
     return;
   }
   const s = lessonState();
@@ -721,11 +803,11 @@ function lessonAdvance() {
       const m = E.moveFromSAN(s, san);
       lessonPlay(m);
       $('olMsg').innerHTML = `<p>Gegner spielt <b>${de(san)}</b>: ${text}</p>` +
-        (lesson.idx < o.moves.length ? '<p class="small">Jetzt du! Finde den nächsten Zug der Eröffnung.</p>' : '');
+        (lesson.idx < o.moves.length ? `<p class="small">Jetzt du! ${o.side === 'b' ? 'Wie reagiert Schwarz hier?' : 'Finde den nächsten Zug.'}</p>` : '');
       lessonAdvance();
-    }, lesson.idx === 0 ? 500 : 900);
+    }, lesson.idx === 0 ? 600 : 900);
   } else if (lesson.idx === 0) {
-    $('olMsg').innerHTML = '<p>Du fängst an! Welcher Zug eröffnet diese Partie? Tipp: Drück auf „💡 Zug zeigen“, wenn du es nicht weißt.</p>';
+    $('olMsg').innerHTML = '<p>Du fängst an! Welcher Zug eröffnet diese Partie? Drück auf „💡 Zug zeigen“, wenn du es nicht weißt.</p>';
   }
 }
 
@@ -741,7 +823,9 @@ function lessonMove(m) {
   } else {
     shakeBoard();
     const t = E.typeOf(expected.piece);
-    $('olMsg').innerHTML = `<p class="warn">Nicht ganz. Dein Zug ${de(E.toSAN(s, m))} ist in dieser Eröffnung nicht üblich.</p>
+    const sc = E.scoreMove(s, m, 2), se = E.scoreMove(s, expected, 2);
+    const okish = sc >= se - 40;
+    $('olMsg').innerHTML = `<p class="warn">Nicht ganz. ${de(E.toSAN(s, m))} ${okish ? 'ist spielbar, aber in dieser Eröffnung spielt man hier etwas anderes.' : 'ist hier nicht gut: Der Zug ' + joinReasons(explainMove(s, m).slice(0, 2)) + '.'}</p>
       <p class="small">Kleiner Hinweis: Ziehe ${t === 'q' ? 'die' : 'den'} <b>${NAME[t]}</b>.</p>`;
     ui.hintFrom = expected.from;
     render();
@@ -752,17 +836,19 @@ function renderSteps() {
   const o = lesson.o;
   const ol = $('olSteps');
   ol.innerHTML = '';
+  $('olProg').style.width = (100 * lesson.idx / o.moves.length) + '%';
   for (let k = 0; k < lesson.idx; k++) {
     const li = document.createElement('li');
     const num = Math.floor(k / 2) + 1;
+    const mine = (k % 2 === 0) === (o.side === 'w');
+    if (mine) li.className = 'mine';
     li.innerHTML = `<b>${k % 2 ? num + '…' : num + '.'} ${de(o.moves[k][0])}</b> – ${o.moves[k][1]}`;
     ol.appendChild(li);
   }
-  ol.scrollTop = ol.scrollHeight;
 }
 
 // ===================== Rätsel =====================
-const puzzle = { idx: 0, state: null, lastMove: null, solved: false, tries: 0 };
+const puzzle = { idx: 0, state: null, lastMove: null, solved: false, tries: 0, step: 0, filter: 'all', hintShown: false };
 
 function loadSolved() {
   try { return JSON.parse(localStorage.getItem('schach-solved') || '[]'); } catch (e) { return []; }
@@ -770,76 +856,132 @@ function loadSolved() {
 function saveSolved(list) {
   try { localStorage.setItem('schach-solved', JSON.stringify(list)); } catch (e) { /* egal */ }
 }
+const isMateState = s => E.inCheck(s, s.turn) && !E.legalMoves(s).length;
+const visiblePuzzles = () => PUZZLES.map((p, k) => k).filter(k => puzzle.filter === 'all' || PUZZLES[k].level === puzzle.filter);
 
 function renderPuzzleList() {
   const solved = loadSolved();
   const list = $('puzzleList');
-  list.innerHTML = '<p class="small">Taktik-Rätsel trainieren deinen Blick für Matt-Muster, Gabeln und mehr. Finde den besten Zug!</p>';
-  PUZZLES.forEach((p, k) => {
+  list.innerHTML = '';
+  $('pzProgress').textContent = `${PUZZLES.filter(p => solved.includes(p.title)).length} von ${PUZZLES.length} gelöst`;
+  for (const k of visiblePuzzles()) {
+    const p = PUZZLES[k];
+    const turn = p.fen.split(' ')[1];
+    const done = solved.includes(p.title);
     const btn = document.createElement('button');
     btn.className = 'card';
-    const done = solved.includes(p.title);
-    btn.innerHTML = `<span><span class="t">${k + 1}. ${p.title}</span><br><span class="s">${p.goal}</span></span><span class="badge ${done ? 'done' : ''}">${done ? '✓ gelöst' : 'offen'}</span>`;
+    btn.innerHTML = `<span class="ci ${turn}">${GLYPH.k}${VS}</span>
+      <span class="cb"><span class="t">${p.title}</span><span class="s">${p.goal}</span></span>
+      <span class="badge ${done ? 'done' : p.level}">${done ? '✓ gelöst' : p.level}</span>`;
     btn.onclick = () => startPuzzle(k);
     list.appendChild(btn);
-  });
+  }
 }
 
 function startPuzzle(k) {
   const p = PUZZLES[k];
-  Object.assign(puzzle, { idx: k, state: E.parseFEN(p.fen), lastMove: null, solved: false, tries: 0 });
-  $('puzzleList').hidden = true;
+  Object.assign(puzzle, { idx: k, state: E.parseFEN(p.fen), lastMove: null, solved: false, tries: 0, step: 0, hintShown: false });
+  const me = puzzle.state.turn;
+  puzzle.me = me;
+  $('puzzleListView').hidden = true;
   $('puzzleView').hidden = false;
-  $('pzTitle').textContent = `${k + 1}. ${p.title}`;
-  $('pzGoal').textContent = p.goal;
-  $('pzMsg').innerHTML = `<p>${puzzle.state.turn === 'w' ? 'Weiß' : 'Schwarz'} ist am Zug. Schau dir die Stellung genau an!</p>`;
-  $('pzNext').textContent = k < PUZZLES.length - 1 ? 'Nächstes ›' : 'Zur Liste';
-  ui.orientation = puzzle.state.turn;
+  $('pzTitle').textContent = p.title;
+  $('pzLevel').textContent = p.level;
+  $('pzLevel').className = 'badge ' + p.level;
+  $('pzTurn').className = 'turnbox ' + me;
+  $('pzTurn').innerHTML = `<span class="piece ${me}">${GLYPH.k}${VS}</span><span>${me === 'w' ? 'Weiß' : 'Schwarz'} am Zug<br><span style="font-weight:400">${p.goal}</span></span>`;
+  $('pzMsg').innerHTML = `<p>Schau dir die Stellung genau an. Prüfe zuerst alle Schachgebote, dann alle Schlagzüge, dann Drohungen.</p>`;
+  ui.orientation = me;
+  ui.mark = null;
   setContext({
     get state() { return puzzle.state; },
     get lastMove() { return puzzle.lastMove; },
-    me: puzzle.state.turn,
+    me,
+    players: { [me]: { name: 'Du' }, [E.other(me)]: { name: 'Gegner' } },
     showThreats: () => false,
-    canMove: () => !puzzle.solved,
+    noCaps: true,
+    canMove: () => !puzzle.solved && puzzle.state.turn === me,
     onMove: puzzleMove,
   });
   updateAskBox();
 }
 
-function puzzleSolution(s, p) {
-  if (p.solution) return E.moveFromSAN(s, p.solution);
-  return E.legalMoves(s).find(m => {
-    const n = E.makeMove(s, m);
-    return E.inCheck(n, n.turn) && !E.legalMoves(n).length;
-  });
+function expectedPuzzleMove() {
+  const p = PUZZLES[puzzle.idx];
+  const san = p.sol[puzzle.step];
+  return san ? E.moveFromSAN(puzzle.state, san) : null;
+}
+
+function puzzleSolution() {
+  const exp = expectedPuzzleMove();
+  if (exp) return exp;
+  const r = E.bestMove(puzzle.state, 3);
+  return r && r.move;
 }
 
 function puzzleMove(m) {
   const p = PUZZLES[puzzle.idx];
   const s = puzzle.state;
   const after = E.makeMove(s, m);
-  const ok = p.mate
-    ? E.inCheck(after, after.turn) && !E.legalMoves(after).length
-    : sameMove(m, E.moveFromSAN(s, p.solution));
-  const prev = s;
-  puzzle.state = after;
-  puzzle.lastMove = m;
-  render();
-  if (ok) {
-    puzzle.solved = true;
-    $('pzMsg').innerHTML = `<p class="good">🎉 Richtig!</p><p>${p.explain}</p>`;
-    const solved = loadSolved();
-    if (!solved.includes(p.title)) { solved.push(p.title); saveSolved(solved); }
-  } else {
+  const exp = expectedPuzzleMove();
+  const mate = isMateState(after);
+  let ok = false;
+  if (p.mate && mate) ok = true;
+  else if (exp && sameMove(m, exp)) ok = true;
+  else if (p.mate) {
+    const remaining = p.mate - puzzle.step;
+    if (remaining === 2) {
+      const replies = E.legalMoves(after);
+      ok = replies.length > 0 && replies.every(x => matesInOne(E.makeMove(after, x)).length > 0);
+    }
+  } else if (exp) {
+    ok = E.scoreMove(s, m, 3) >= E.scoreMove(s, exp, 3) - 30;
+  }
+
+  if (!ok) {
     puzzle.tries++;
-    $('pzMsg').innerHTML = `<p class="warn">Leider nicht. Versuch’s nochmal!</p>${puzzle.tries >= 2 ? `<p class="small">Hinweis: ${p.hint}</p>` : ''}`;
+    puzzle.state = after; puzzle.lastMove = m;
+    ui.mark = { sq: m.to, cls: 'wrong' };
+    render();
+    const why = joinReasons(explainMove(s, m).slice(0, 2));
+    $('pzMsg').innerHTML = `<p class="bad">✗ ${de(E.toSAN(s, m))} ist nicht die Lösung.</p><p class="small">Der Zug ${why}. ${p.mate ? 'Aber es gibt einen Weg zum Matt!' : 'Es gibt etwas Stärkeres!'}</p>${puzzle.tries >= 2 ? `<p class="small">💡 Hinweis: ${p.hint}</p>` : ''}`;
     ui.busy = true;
     setTimeout(() => {
       ui.busy = false;
-      puzzle.state = prev; puzzle.lastMove = null;
+      puzzle.state = s; puzzle.lastMove = null; ui.mark = null;
       render();
-    }, 900);
+    }, 1000);
+    return;
   }
+
+  puzzle.state = after; puzzle.lastMove = m; puzzle.step++;
+  ui.mark = { sq: m.to, cls: 'ok' };
+  ui.arrows = []; ui.hintFrom = -1;
+  render();
+  const done = mate || (!p.mate && puzzle.step >= p.sol.length);
+  if (done) {
+    puzzle.solved = true;
+    $('pzMsg').innerHTML = `<p class="good">🎉 Gelöst${puzzle.tries ? '' : ' – beim ersten Versuch'}!</p><p>${p.explain}</p>`;
+    showToast(mate ? '♛ Schachmatt – gelöst!' : '🎉 Gelöst!', 1500);
+    const solved = loadSolved();
+    if (!solved.includes(p.title)) { solved.push(p.title); saveSolved(solved); }
+    return;
+  }
+  $('pzMsg').innerHTML = `<p class="good">✓ ${de(E.toSAN(s, m))} – richtig! Weiter so.</p><p class="small">Mal sehen, wie der Gegner antwortet …</p>`;
+  ui.busy = true;
+  setTimeout(() => {
+    const depth = p.mate ? Math.max(2, 2 * (p.mate - puzzle.step)) : 3;
+    const r = E.bestMove(puzzle.state, Math.min(depth, 4));
+    ui.busy = false;
+    if (!r) return;
+    const rs = puzzle.state;
+    puzzle.state = E.makeMove(rs, r.move);
+    puzzle.lastMove = r.move;
+    ui.mark = null;
+    render();
+    const left = p.mate ? p.mate - puzzle.step : 0;
+    $('pzMsg').innerHTML = `<p>Gegner spielt <b>${de(E.toSAN(rs, r.move))}</b>.</p><p>Jetzt du! ${left === 1 ? 'Setz Matt!' : left > 1 ? `Noch ${left} Züge bis Matt.` : 'Hol dir den Gewinn!'}</p>`;
+  }, 700);
 }
 
 // ===================== KI-Trainer (Fragen stellen) =====================
@@ -924,7 +1066,7 @@ function buildContext() {
   const parts = [];
   if (mode === 'play') {
     const s = curState();
-    parts.push(`MODUS: Partie gegen den Computer. Der Schüler spielt ${game.player === 'w' ? 'Weiß' : 'Schwarz'}, der Computer ${game.player === 'w' ? 'Schwarz' : 'Weiß'}.`);
+    parts.push(twoPlayer() ? 'MODUS: Analysebrett. Der Schüler zieht BEIDE Seiten selbst (Weiß und Schwarz), um auszuprobieren, wie man reagiert. Erkläre Züge für die Seite, nach der er fragt, bzw. für die Seite am Zug.' : `MODUS: Partie gegen den Computer (Stufe ${LEVELS[game.level]}). Der Schüler spielt ${game.player === 'w' ? 'Weiß' : 'Schwarz'}, der Computer ${game.player === 'w' ? 'Schwarz' : 'Weiß'}.${game.player === 'b' ? ' Der Schüler will lernen, wie man als Schwarz richtig auf die Züge von Weiß reagiert.' : ''}`);
     if (game.lastOpening) parts.push(`Eröffnung: ${game.lastOpening}`);
     parts.push(`Züge bisher: ${moveListText(game.sans)}`);
     parts.push(`FEN: ${E.toFEN(s)}`);
@@ -944,7 +1086,8 @@ function buildContext() {
   } else if (mode === 'puzzles' && puzzle.state && !$('puzzleView').hidden) {
     const p = PUZZLES[puzzle.idx], s = puzzle.state;
     parts.push(`MODUS: Taktik-Rätsel „${p.title}“. Aufgabe: ${p.goal}`);
-    parts.push(`Lösung (NICHT verraten! Gib nur schrittweise Hinweise, außer der Schüler bittet ausdrücklich um die Lösung): ${p.solution ? de(p.solution) : 'jeder Mattzug'} – ${p.explain}`);
+    parts.push(`Lösung (NICHT verraten! Gib nur schrittweise Hinweise, außer der Schüler bittet ausdrücklich um die Lösung): ${p.sol.map(de).join(', ')} (Gegenzüge spielt die Engine) – ${p.explain}`);
+    parts.push(`Schwierigkeit: ${p.level}. Bisher richtig gespielte Lösungszüge des Schülers: ${puzzle.step}. Der Schüler spielt ${puzzle.me === 'w' ? 'Weiß' : 'Schwarz'}.`);
     parts.push(puzzle.solved ? 'Der Schüler hat das Rätsel bereits gelöst.' : 'Der Schüler hat es noch nicht gelöst.');
     parts.push(`FEN: ${E.toFEN(s)}`);
     parts.push(`Figuren:\n${pieceListing(s)}`);
@@ -1005,12 +1148,14 @@ function formatAnswer(text) {
   return html;
 }
 
+function scrollChat() { const pb = $('askBox').closest('.pbody'); if (pb) pb.scrollTop = pb.scrollHeight; }
+
 function addMsg(role, html) {
   const d = document.createElement('div');
   d.className = 'msg ' + role;
   d.innerHTML = html;
   $('chatLog').appendChild(d);
-  $('chatLog').scrollTop = $('chatLog').scrollHeight;
+  scrollChat();
   return d;
 }
 
@@ -1085,7 +1230,7 @@ async function ask(question) {
     cache: false,
     modelTier: 'default',
     effort: 'low',
-    onText: ({ text }) => { bubble.classList.remove('thinking'); bubble.innerHTML = formatAnswer(text); $('chatLog').scrollTop = $('chatLog').scrollHeight; },
+    onText: ({ text }) => { bubble.classList.remove('thinking'); bubble.innerHTML = formatAnswer(text); scrollChat(); },
   };
   if (chat.tools) { opts.tools = CHAT_TOOLS; delete opts.cache; }
   try {
@@ -1129,53 +1274,93 @@ async function initChat() {
 }
 
 function updateAskBox() {
-  $('askBox').hidden = !chat.sample || mode === 'tips';
+  const box = $('askBox');
+  $('subAskBtn').hidden = !chat.sample;
+  let host = null;
+  if (mode === 'play') host = $('sub-ask');
+  else if (mode === 'openings' && !$('openingLesson').hidden) host = $('olAsk');
+  else if (mode === 'puzzles' && !$('puzzleView').hidden) host = $('pzAsk');
+  if (host && box.parentElement !== host) host.appendChild(box);
+  box.hidden = !chat.sample || !host;
   if (chat.sample) renderChips();
 }
 
-// ===================== Tabs & Start =====================
+// ===================== Bereiche & Start =====================
 function showTab(tab) {
   mode = tab;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   for (const t of ['play', 'openings', 'puzzles']) $('panel-' + t).hidden = t !== tab;
   $('panel-tips').hidden = tab !== 'tips';
   $('boardArea').hidden = tab === 'tips';
-  document.querySelector('.panel').hidden = tab === 'tips';
+  $('panel').hidden = tab === 'tips';
   clearTimeout(lesson.timer);
+  ui.mark = null;
+  $('evalV').style.visibility = tab === 'play' ? 'visible' : 'hidden';
+  $('toast').hidden = true;
   if (tab === 'play') {
-    ui.orientation = game.player;
+    ui.orientation = twoPlayer() ? ui.orientation : game.player;
     setContext(playContext());
     updatePlayUI();
-    if (!game.over && curState().turn !== game.player && !ui.busy) later(computerMove, 300);
+    if (!game.over && !twoPlayer() && curState().turn !== game.player && !ui.busy) later(computerMove, 300);
   } else if (tab === 'openings') {
-    $('openingList').hidden = false; $('openingLesson').hidden = true;
+    $('openingListView').hidden = false; $('openingLesson').hidden = true;
     renderOpeningList();
     ui.orientation = 'w';
     setContext({ state: E.parseFEN(E.START_FEN), lastMove: null, canMove: () => false, onMove() {}, showThreats: () => false });
   } else if (tab === 'puzzles') {
-    $('puzzleList').hidden = false; $('puzzleView').hidden = true;
+    $('puzzleListView').hidden = false; $('puzzleView').hidden = true;
     renderPuzzleList();
-    startPuzzlePreview();
+    const first = PUZZLES[visiblePuzzles()[0] || 0];
+    const s = E.parseFEN(first.fen);
+    ui.orientation = s.turn;
+    setContext({ state: s, lastMove: null, canMove: () => false, onMove() {}, showThreats: () => false });
   }
+  window.scrollTo(0, 0);
   updateAskBox();
 }
 
-function startPuzzlePreview() {
-  const s = E.parseFEN(PUZZLES[0].fen);
-  ui.orientation = s.turn;
-  setContext({ state: s, lastMove: null, canMove: () => false, onMove() {}, showThreats: () => false });
+function openNewGame() {
+  const sel = { color: settings.color, level: settings.level, board: settings.board };
+  const sync = () => {
+    document.querySelectorAll('#ngColor button').forEach(b => b.classList.toggle('on', b.dataset.color === sel.color));
+    document.querySelectorAll('#ngLevel button').forEach(b => b.classList.toggle('on', Number(b.dataset.level) === sel.level));
+    document.querySelectorAll('#ngTheme button').forEach(b => b.classList.toggle('on', b.dataset.themeBoard === sel.board));
+    $('ngColor').style.opacity = sel.level === 0 ? '.45' : '1';
+  };
+  document.querySelectorAll('#ngColor button').forEach(b => { b.onclick = () => { sel.color = b.dataset.color; sync(); }; });
+  document.querySelectorAll('#ngLevel button').forEach(b => { b.onclick = () => { sel.level = Number(b.dataset.level); sync(); }; });
+  document.querySelectorAll('#ngTheme button').forEach(b => { b.onclick = () => { sel.board = b.dataset.themeBoard; settings.board = sel.board; applyBoardTheme(); sync(); }; });
+  $('ngCancel').onclick = () => { $('newGameModal').hidden = true; };
+  $('ngStart').onclick = () => {
+    Object.assign(settings, sel);
+    saveSettings();
+    applyBoardTheme();
+    $('newGameModal').hidden = true;
+    if (mode !== 'play') showTab('play');
+    newGame(null, null, null, sel.level === 0 ? 'w' : sel.color, sel.level);
+  };
+  sync();
+  $('newGameModal').hidden = false;
 }
 
 function init() {
   $('panel-tips').innerHTML = TIPS_HTML;
+  applyBoardTheme();
   document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
-  $('newGameBtn').onclick = () => { if (!ui.busy) newGame(); };
-  $('levelSel').onchange = () => { game.level = parseInt($('levelSel').value, 10); };
+  document.querySelectorAll('.subtabs button').forEach(b => b.addEventListener('click', () => showSub(b.dataset.sub)));
+  $('newGameBtn').onclick = () => { if (!ui.busy) openNewGame(); };
   $('undoBtn').onclick = undo;
   $('hintBtn').onclick = hint;
-  $('flipBtn').onclick = () => { ui.orientation = E.other(ui.orientation); render(); };
+  $('flipBtn').onclick = () => { ui.orientation = E.other(ui.orientation); render(); updateEval(); };
   $('threatChk').onchange = render;
+  $('newGameModal').addEventListener('click', e => { if (e.target === $('newGameModal')) $('newGameModal').hidden = true; });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') $('newGameModal').hidden = true; });
 
+  document.querySelectorAll('#openingFilter button').forEach(b => b.addEventListener('click', () => {
+    lesson.filter = b.dataset.f;
+    document.querySelectorAll('#openingFilter button').forEach(x => x.classList.toggle('on', x === b));
+    renderOpeningList();
+  }));
   $('openingBack').onclick = () => showTab('openings');
   $('olRestart').onclick = () => startLesson(lesson.o);
   $('olHint').onclick = () => {
@@ -1187,24 +1372,33 @@ function init() {
     render();
   };
   $('olPlay').onclick = () => {
+    const lv = settings.level || 2;
     showTab('play');
-    newGame(lesson.states, lesson.moves, lesson.sans, lesson.o.side);
+    newGame(lesson.states, lesson.moves, lesson.sans, lesson.o.side, lv);
   };
 
+  document.querySelectorAll('#puzzleFilter button').forEach(b => b.addEventListener('click', () => {
+    puzzle.filter = b.dataset.f;
+    document.querySelectorAll('#puzzleFilter button').forEach(x => x.classList.toggle('on', x === b));
+    renderPuzzleList();
+  }));
   $('puzzleBack').onclick = () => showTab('puzzles');
   $('pzHint').onclick = () => {
     const p = PUZZLES[puzzle.idx];
-    $('pzMsg').insertAdjacentHTML('beforeend', `<p class="small">💡 ${p.hint}</p>`);
+    if (!puzzle.hintShown) { $('pzMsg').insertAdjacentHTML('beforeend', `<p class="small">💡 ${p.hint}</p>`); puzzle.hintShown = true; }
+    else { const m = puzzleSolution(); if (m) { ui.hintFrom = m.from; render(); } }
   };
   $('pzSolve').onclick = () => {
     if (puzzle.solved || ui.busy) return;
-    const p = PUZZLES[puzzle.idx];
-    const m = puzzleSolution(puzzle.state, p);
-    if (m) { ui.arrows = [{ from: m.from, to: m.to }]; render(); }
-    $('pzMsg').innerHTML = `<p>Die Lösung ist der Pfeil auf dem Brett. Spiel den Zug selbst!</p><p class="small">${p.explain}</p>`;
+    const m = puzzleSolution();
+    if (m) { ui.arrows = [{ from: m.from, to: m.to }]; ui.hintFrom = -1; render(); }
+    $('pzMsg').innerHTML = `<p>Der Pfeil zeigt den nächsten Lösungszug. Spiel ihn selbst!</p><p class="small">${PUZZLES[puzzle.idx].explain}</p>`;
   };
+  $('pzRetry').onclick = () => startPuzzle(puzzle.idx);
   $('pzNext').onclick = () => {
-    if (puzzle.idx < PUZZLES.length - 1) startPuzzle(puzzle.idx + 1);
+    const vis = visiblePuzzles();
+    const pos = vis.indexOf(puzzle.idx);
+    if (pos >= 0 && pos < vis.length - 1) startPuzzle(vis[pos + 1]);
     else showTab('puzzles');
   };
 
@@ -1222,9 +1416,7 @@ function init() {
         if (!m) break;
         sans.push(E.toSAN(st, m)); moves.push(m); states.push(E.makeMove(st, m));
       }
-      if (data.level) $('levelSel').value = String(data.level);
-      $('colorSel').value = data.player;
-      newGame(states, moves, sans, data.player);
+      newGame(states, moves, sans, data.player, Number(data.level) || 0);
     } else newGame();
     initChat();
   };
