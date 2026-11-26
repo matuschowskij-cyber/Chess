@@ -922,12 +922,33 @@ function renderSteps() {
   }
 }
 
-// ===================== Rätsel & Training =====================
-const BASE_RATING = { Leicht: 700, Mittel: 1150, Schwer: 1550 };
-const ALL_PUZZLES = PUZZLES.map(p => ({ ...p, key: p.title, rating: p.rating || BASE_RATING[p.level] }))
-  .concat((typeof GEN_PUZZLES !== 'undefined' ? GEN_PUZZLES : []).map((g, k) => ({ ...g, gen: true, key: 'g' + k, num: k + 1 })));
+// ===================== Rätsel (Lichess-Datenbank) & Training =====================
+const THEME_DE = {
+  mate: 'Matt', mateIn1: 'Matt in 1', mateIn2: 'Matt in 2', mateIn3: 'Matt in 3', mateIn4: 'Matt in 4', mateIn5: 'Matt in 5+',
+  fork: 'Gabel', pin: 'Fesselung', skewer: 'Spieß', discoveredAttack: 'Abzugsangriff', discoveredCheck: 'Abzugsschach', doubleCheck: 'Doppelschach',
+  sacrifice: 'Opfer', deflection: 'Ablenkung', attraction: 'Hinlenkung', clearance: 'Räumung', interference: 'Unterbrechung', intermezzo: 'Zwischenzug',
+  quietMove: 'Stiller Zug', zugzwang: 'Zugzwang', trappedPiece: 'Gefangene Figur', hangingPiece: 'Ungedeckte Figur', capturingDefender: 'Verteidiger schlagen',
+  xRayAttack: 'Röntgenangriff', defensiveMove: 'Verteidigung', advancedPawn: 'Vorgerückter Bauer', promotion: 'Umwandlung', underPromotion: 'Unterverwandlung',
+  backRankMate: 'Grundreihenmatt', smotheredMate: 'Ersticktes Matt', anastasiaMate: 'Anastasias Matt', arabianMate: 'Arabisches Matt', bodenMate: 'Bodens Matt',
+  hookMate: 'Hakenmatt', dovetailMate: 'Schwalbenschwanzmatt', epauletteMate: 'Epaulettenmatt', operaMate: 'Opernmatt', pillsburysMate: 'Pillsburys Matt',
+  morphysMate: 'Morphys Matt', cornerMate: 'Eckmatt', killBoxMate: 'Kastenmatt', swallowstailMate: 'Schwalbenschwanzmatt', vukovicMate: 'Vukovićs Matt',
+  blindSwineMate: 'Blinde Schweine', triangleMate: 'Dreiecksmatt', balestraMate: 'Balestra-Matt', doubleBishopMate: 'Läuferpaar-Matt',
+  kingsideAttack: 'Königsangriff', queensideAttack: 'Damenflügelangriff', exposedKing: 'Offener König', attackingF2F7: 'Angriff auf f2/f7',
+  endgame: 'Endspiel', middlegame: 'Mittelspiel', opening: 'Eröffnung', rookEndgame: 'Turmendspiel', pawnEndgame: 'Bauernendspiel', bishopEndgame: 'Läuferendspiel',
+  knightEndgame: 'Springerendspiel', queenEndgame: 'Damenendspiel', queenRookEndgame: 'Dame-Turm-Endspiel', enPassant: 'En passant', castling: 'Rochade',
+  crushing: 'Entscheidender Vorteil', advantage: 'Vorteil', equality: 'Ausgleich', oneMove: 'Ein Zug', short: 'Kurz', long: 'Lang', veryLong: 'Sehr lang',
+  master: 'Aus Meisterpartie', masterVsMaster: 'Meister gegen Meister', superGM: 'Weltklasse-Partie', collinearMove: 'Linienzug',
+};
+// Motive, die als Titel taugen (wichtigste zuerst)
+const MOTIF_ORDER = ['smotheredMate', 'anastasiaMate', 'arabianMate', 'bodenMate', 'hookMate', 'epauletteMate', 'operaMate', 'pillsburysMate', 'morphysMate', 'dovetailMate', 'swallowstailMate', 'backRankMate', 'cornerMate', 'killBoxMate', 'vukovicMate', 'doubleCheck', 'discoveredCheck', 'zugzwang', 'quietMove', 'intermezzo', 'interference', 'clearance', 'deflection', 'attraction', 'xRayAttack', 'skewer', 'fork', 'pin', 'discoveredAttack', 'capturingDefender', 'trappedPiece', 'sacrifice', 'underPromotion', 'promotion', 'advancedPawn', 'defensiveMove', 'enPassant', 'mateIn1', 'mateIn2', 'mateIn3', 'mateIn4', 'mateIn5', 'hangingPiece', 'exposedKing', 'kingsideAttack', 'attackingF2F7'];
+const THEME_FILTERS = [['all', 'Alle Motive'], ['mate', 'Matt'], ['fork', 'Gabel'], ['pin', 'Fesselung'], ['skewer', 'Spieß'], ['discoveredAttack', 'Abzug'], ['sacrifice', 'Opfer'], ['deflection', 'Ablenkung'], ['quietMove', 'Stiller Zug'], ['intermezzo', 'Zwischenzug'], ['defensiveMove', 'Verteidigung'], ['endgame', 'Endspiel'], ['zugzwang', 'Zugzwang']];
 
-const puzzle = { idx: 0, state: null, lastMove: null, solved: false, tries: 0, step: 0, filter: 'all', hintShown: false, training: false, rated: false, helped: false };
+const levelOf = r => (r < 1200 ? 'Leicht' : r < 1800 ? 'Mittel' : 'Schwer');
+const ALL_PUZZLES = LICHESS_PUZZLES.map(([id, fen, moves, rating, themes]) => ({
+  key: 'L' + id, id, fen, moves: moves.split(' '), rating, themes: themes.split(' '), level: levelOf(rating),
+}));
+
+const puzzle = { idx: 0, state: null, lastMove: null, solved: false, failed: false, step: 1, filter: 'all', theme: 'all', training: false, rated: false, helped: false, shown: 40 };
 
 function loadSolved() {
   try { return JSON.parse(localStorage.getItem('schach-solved') || '[]'); } catch (e) { return []; }
@@ -935,87 +956,92 @@ function loadSolved() {
 function saveSolved(list) {
   try { localStorage.setItem('schach-solved', JSON.stringify(list)); } catch (e) { /* egal */ }
 }
-const trainer = { r: 800, streak: 0, best: 0 };
-try { Object.assign(trainer, JSON.parse(localStorage.getItem('schach-training') || '{}')); } catch (e) { /* egal */ }
-function saveTrainer() { try { localStorage.setItem('schach-training', JSON.stringify(trainer)); } catch (e) { /* egal */ } }
+const trainer = { r: 1000, streak: 0, best: 0 };
+try { Object.assign(trainer, JSON.parse(localStorage.getItem('schach-training2') || '{}')); } catch (e) { /* egal */ }
+function saveTrainer() { try { localStorage.setItem('schach-training2', JSON.stringify(trainer)); } catch (e) { /* egal */ } }
 
 const isMateState = s => E.inCheck(s, s.turn) && !E.legalMoves(s).length;
-const visiblePuzzles = () => ALL_PUZZLES.map((p, k) => k).filter(k => puzzle.filter === 'all' || ALL_PUZZLES[k].level === puzzle.filter);
+const uciOf = m => E.sqName(m.from) + E.sqName(m.to) + (m.promo ? E.typeOf(m.promo) : '');
+function uciToMove(s, u) {
+  if (!u) return null;
+  const from = E.sqIndex(u.slice(0, 2)), to = E.sqIndex(u.slice(2, 4)), pr = u[4];
+  return E.legalMoves(s).find(m => m.from === from && m.to === to && (!pr || E.typeOf(m.promo) === pr)) || null;
+}
+const visiblePuzzles = () => ALL_PUZZLES.map((p, k) => k).filter(k => {
+  const p = ALL_PUZZLES[k];
+  return (puzzle.filter === 'all' || p.level === puzzle.filter) && (puzzle.theme === 'all' || p.themes.includes(puzzle.theme));
+});
 
-// Titel, Ziel, Hinweis und Erklärung – bei generierten Rätseln automatisch aus der Lösung abgeleitet
 function puzzleMeta(p) {
   if (p._meta) return p._meta;
-  if (!p.gen) return (p._meta = { title: p.title, goal: p.goal, hint: p.hint, explain: p.explain, motif: p.title });
-  const s = E.parseFEN(p.fen);
-  const m = E.moveFromSAN(s, p.sol[0]);
-  const side = s.turn === 'w' ? 'Weiß' : 'Schwarz';
-  const t = E.typeOf(m.piece);
-  const ns = E.makeMove(s, m);
-  const check = E.inCheck(ns, ns.turn);
-  const reasons = explainMove(s, m);
-  const sacrifice = (m.captured && E.VALUE[E.typeOf(m.captured)] + 100 < E.VALUE[t]) || (!m.captured && t !== 'p' && t !== 'k' && isHanging(ns, m.to));
-  let motif;
-  if (p.mate) motif = sacrifice ? `Matt in ${p.mate} mit Opfer` : `Matt in ${p.mate}`;
-  else if (reasons.some(r => r.includes('Gabel'))) motif = 'Gabel';
-  else if (sacrifice) motif = 'Opfer';
-  else if (!m.captured && !check) motif = 'Stiller Zug';
-  else if (check) motif = 'Schach mit Folgen';
-  else motif = 'Kombination';
-  const HINTS = {
-    Gabel: 'Suche einen Zug, der zwei Dinge gleichzeitig angreift.',
-    Opfer: 'Hab keine Angst, etwas zu opfern – danach gewinnst du mehr zurück.',
-    'Stiller Zug': 'Kein Schach und kein Schlagzug: Ein ruhiger Zug schafft eine Drohung, gegen die es keine Verteidigung gibt.',
-    'Schach mit Folgen': 'Beginne mit einem Schachgebot – danach hat der Gegner keine Zeit, sich zu verteidigen.',
-    Kombination: 'Prüfe alle Schlagzüge und rechne aus, was danach passiert.',
-  };
-  const base = p.mate ? 'Prüfe zuerst alle Schachgebote – auch die, bei denen du etwas opferst.' : HINTS[motif];
+  const motif = MOTIF_ORDER.find(t => p.themes.includes(t)) || (p.themes.includes('mate') ? 'mate' : 'crushing');
+  const solverTurn = p.fen.split(' ')[1] === 'w' ? 'b' : 'w';
+  const side = solverTurn === 'w' ? 'Weiß' : 'Schwarz';
+  const isMate = p.themes.includes('mate');
+  const mateN = (p.themes.find(t => /^mateIn\d$/.test(t)) || '').slice(6);
+  const n = Math.floor(p.moves.length / 2);
+  const shown = p.themes.filter(t => THEME_DE[t] && !['short', 'long', 'veryLong', 'oneMove', 'crushing', 'advantage', 'equality', 'master', 'masterVsMaster', 'superGM', 'middlegame', 'collinearMove'].includes(t));
   return (p._meta = {
-    title: `#${p.num} · ${motif}`,
-    motif,
-    goal: p.mate ? `${side} setzt Matt in ${p.mate} Zügen.` : `${side} zieht und gewinnt Material.`,
-    hint: `${base} Der erste Zug wird mit ${t === 'q' ? 'der' : 'dem'} ${NAME[t] === 'Dame' ? 'Dame' : NAME[t]} gespielt.`,
-    explain: `Lösung: ${p.sol.map(de).join(' … ')}. Der erste Zug ${joinReasons(reasons)}.`,
+    title: THEME_DE[motif] || 'Taktik',
+    side, solverTurn,
+    goal: isMate ? `${side} setzt Matt${mateN ? ` in ${mateN}` : ''}.` : p.themes.includes('equality') ? `${side} rettet sich.` : `${side} findet den besten Zug.`,
+    steps: n,
+    tags: shown.map(t => THEME_DE[t]),
+    hint: `Motiv: ${shown.filter(t => MOTIF_ORDER.includes(t)).map(t => THEME_DE[t]).slice(0, 2).join(', ') || THEME_DE[motif] || 'Taktik'}.`,
   });
+}
+
+function solutionSans(p) {
+  let s = E.parseFEN(p.fen);
+  const out = [];
+  p.moves.forEach((u, k) => {
+    const m = uciToMove(s, u);
+    if (k > 0) out.push((k % 2 ? '' : '(') + de(E.toSAN(s, m)) + (k % 2 ? '' : ')'));
+    s = E.makeMove(s, m);
+  });
+  return out.join(' ');
 }
 
 function renderPuzzleList() {
   const solved = loadSolved();
   const list = $('puzzleList');
   list.innerHTML = '';
-  $('pzProgress').textContent = `${ALL_PUZZLES.filter(p => solved.includes(p.key)).length} von ${ALL_PUZZLES.length} gelöst`;
+  $('pzProgress').textContent = `${ALL_PUZZLES.filter(p => solved.includes(p.key)).length} von ${ALL_PUZZLES.length} gelöst · Rätsel von Lichess`;
   $('trRating').textContent = Math.round(trainer.r);
-  $('trStreak').textContent = trainer.streak ? `🔥 ${trainer.streak} in Folge` : `Rekord: ${trainer.best}`;
+  $('trStreak').textContent = trainer.streak ? `🔥 ${trainer.streak} in Folge · Rekord ${trainer.best}` : `Rekord: ${trainer.best} in Folge`;
   const vis = visiblePuzzles();
-  for (const k of vis.slice(0, puzzle.shown || 40)) {
+  for (const k of vis.slice(0, puzzle.shown)) {
     const p = ALL_PUZZLES[k];
     const meta = puzzleMeta(p);
-    const turn = p.fen.split(' ')[1];
     const done = solved.includes(p.key);
     const btn = document.createElement('button');
     btn.className = 'card';
-    btn.innerHTML = `<span class="ci ${turn}">${GLYPH.k}${VS}</span>
-      <span class="cb"><span class="t">${meta.title} <span class="rt">${p.rating}</span></span><span class="s">${meta.goal}</span></span>
+    btn.innerHTML = `<span class="ci ${meta.solverTurn}">${GLYPH.k}${VS}</span>
+      <span class="cb"><span class="t">${meta.title} <span class="rt">${p.rating}</span></span><span class="s">${meta.goal} ${meta.tags.slice(0, 3).join(' · ')}</span></span>
       <span class="badge ${done ? 'done' : p.level}">${done ? '✓ gelöst' : p.level}</span>`;
     btn.onclick = () => { puzzle.training = false; startPuzzle(k); };
     list.appendChild(btn);
   }
-  if (vis.length > (puzzle.shown || 40)) {
+  if (!vis.length) list.innerHTML = '<p class="small">Keine Rätsel für diese Auswahl.</p>';
+  if (vis.length > puzzle.shown) {
     const more = document.createElement('button');
     more.className = 'more';
-    more.textContent = `Weitere Rätsel anzeigen (${vis.length - (puzzle.shown || 40)} übrig)`;
-    more.onclick = () => { puzzle.shown = (puzzle.shown || 40) + 40; renderPuzzleList(); };
+    more.textContent = `Weitere Rätsel anzeigen (${vis.length - puzzle.shown} übrig)`;
+    more.onclick = () => { puzzle.shown += 40; renderPuzzleList(); };
     list.appendChild(more);
   }
 }
 
-// Training: ein ungelöstes Rätsel passend zur eigenen Wertung
+// Training: ungelöstes Rätsel nahe der eigenen Wertung (berücksichtigt Filter)
 function nextTrainingPuzzle() {
   const solved = loadSolved();
-  let pool = ALL_PUZZLES.map((p, k) => k).filter(k => !solved.includes(ALL_PUZZLES[k].key) && k !== puzzle.idx);
-  if (!pool.length) pool = ALL_PUZZLES.map((p, k) => k).filter(k => k !== puzzle.idx);
-  pool.sort((a, b) => Math.abs(ALL_PUZZLES[a].rating - trainer.r) - Math.abs(ALL_PUZZLES[b].rating - trainer.r));
+  const base = visiblePuzzles().length ? visiblePuzzles() : ALL_PUZZLES.map((p, k) => k);
+  let pool = base.filter(k => !solved.includes(ALL_PUZZLES[k].key) && k !== puzzle.idx);
+  if (!pool.length) pool = base.filter(k => k !== puzzle.idx);
+  const target = trainer.r + 40;
+  pool.sort((a, b) => Math.abs(ALL_PUZZLES[a].rating - target) - Math.abs(ALL_PUZZLES[b].rating - target));
   puzzle.training = true;
-  startPuzzle(pick(pool.slice(0, 6)));
+  startPuzzle(pick(pool.slice(0, 12)));
 }
 
 function ratePuzzle(won) {
@@ -1023,20 +1049,23 @@ function ratePuzzle(won) {
   puzzle.rated = true;
   const pr = ALL_PUZZLES[puzzle.idx].rating;
   const exp = 1 / (1 + Math.pow(10, (pr - trainer.r) / 400));
-  const delta = Math.round(28 * ((won ? 1 : 0) - exp));
-  trainer.r = Math.max(100, trainer.r + delta);
+  const k = trainer.games < 20 ? 40 : 24;
+  const delta = Math.round(k * ((won ? 1 : 0) - exp));
+  trainer.games = (trainer.games || 0) + 1;
+  trainer.r = Math.max(400, trainer.r + delta);
   trainer.streak = won ? trainer.streak + 1 : 0;
   trainer.best = Math.max(trainer.best, trainer.streak);
   saveTrainer();
-  $('pzRatingNow').textContent = `Wertung ${Math.round(trainer.r)} (${delta >= 0 ? '+' : ''}${delta})${trainer.streak > 1 ? ` · 🔥 ${trainer.streak}` : ''}`;
+  $('pzRatingNow').textContent = `🎯 Wertung ${Math.round(trainer.r)} (${delta >= 0 ? '+' : ''}${delta})${trainer.streak > 1 ? ` · 🔥 ${trainer.streak}` : ''}`;
   return delta;
 }
 
 function startPuzzle(k) {
   const p = ALL_PUZZLES[k];
   const meta = puzzleMeta(p);
-  Object.assign(puzzle, { idx: k, state: E.parseFEN(p.fen), lastMove: null, solved: false, tries: 0, step: 0, hintShown: false, rated: false, helped: false });
-  const me = puzzle.state.turn;
+  const s0 = E.parseFEN(p.fen);
+  Object.assign(puzzle, { idx: k, state: s0, lastMove: null, solved: false, failed: false, step: 1, rated: false, helped: false, hintShown: false });
+  const me = meta.solverTurn;
   puzzle.me = me;
   $('puzzleListView').hidden = true;
   $('puzzleView').hidden = false;
@@ -1045,10 +1074,10 @@ function startPuzzle(k) {
   $('pzLevel').className = 'badge ' + p.level;
   $('pzRatingNow').textContent = puzzle.training ? `🎯 Training · deine Wertung ${Math.round(trainer.r)}${trainer.streak ? ` · 🔥 ${trainer.streak}` : ''}` : '';
   $('pzTurn').className = 'turnbox ' + me;
-  $('pzTurn').innerHTML = `<span class="piece ${me}">${GLYPH.k}${VS}</span><span>${me === 'w' ? 'Weiß' : 'Schwarz'} am Zug<br><span style="font-weight:400">${meta.goal}</span></span>`;
-  $('pzMsg').innerHTML = `<p>Nimm dir Zeit. Prüfe zuerst alle <b>Schachgebote</b>, dann alle <b>Schlagzüge</b>, dann <b>Drohungen</b> – für beide Seiten.</p>`;
+  $('pzTurn').innerHTML = `<span class="piece ${me}">${GLYPH.k}${VS}</span><span>Du spielst ${meta.side}<br><span style="font-weight:400">${meta.goal}</span></span>`;
+  $('pzMsg').innerHTML = '<p class="small">Der Gegner zieht zuerst …</p>';
   ui.orientation = me;
-  ui.mark = null;
+  ui.mark = null; ui.arrows = []; ui.hintFrom = -1;
   setContext({
     get state() { return puzzle.state; },
     get lastMove() { return puzzle.lastMove; },
@@ -1056,24 +1085,25 @@ function startPuzzle(k) {
     players: { [me]: { name: 'Du' }, [E.other(me)]: { name: 'Gegner' } },
     showThreats: () => false,
     noCaps: true,
-    canMove: () => !puzzle.solved && puzzle.state.turn === me,
+    canMove: () => !puzzle.solved && !ui.busy && puzzle.state.turn === me,
     onMove: puzzleMove,
   });
+  // Erster Zug gehört dem Gegner (wie bei Lichess)
+  ui.busy = true;
+  setTimeout(() => {
+    const m = uciToMove(puzzle.state, p.moves[0]);
+    const san = de(E.toSAN(puzzle.state, m));
+    puzzle.state = E.makeMove(puzzle.state, m);
+    puzzle.lastMove = m;
+    ui.busy = false;
+    render();
+    $('pzMsg').innerHTML = `<p>Gegner spielt <b>${san}</b>.</p><p><b>Finde den besten Zug für ${meta.side}!</b></p><p class="small">Es gibt nur <b>einen</b> richtigen Zug. Prüfe Schachgebote, Schlagzüge und Drohungen – für beide Seiten.</p>`;
+  }, 700);
   updateAskBox();
 }
 
-function expectedPuzzleMove() {
-  const p = ALL_PUZZLES[puzzle.idx];
-  const san = p.sol[puzzle.step];
-  const m = san ? E.moveFromSAN(puzzle.state, san) : null;
-  if (m || !san) return m;
-  const r = E.bestMove(puzzle.state, 3); // Gegner ist von der gespeicherten Linie abgewichen
-  return r && r.move;
-}
-
-function puzzleSolution() {
-  return expectedPuzzleMove() || (E.bestMove(puzzle.state, 3) || {}).move;
-}
+const expectedPuzzleMove = () => uciToMove(puzzle.state, ALL_PUZZLES[puzzle.idx].moves[puzzle.step]);
+const puzzleSolution = () => expectedPuzzleMove();
 
 function puzzleMove(m) {
   const p = ALL_PUZZLES[puzzle.idx];
@@ -1082,35 +1112,25 @@ function puzzleMove(m) {
   const after = E.makeMove(s, m);
   const exp = expectedPuzzleMove();
   const mate = isMateState(after);
-  let ok = false;
-  if (p.mate && mate) ok = true;
-  else if (exp && sameMove(m, exp)) ok = true;
-  else if (p.mate) {
-    const remaining = p.mate - puzzle.step;
-    if (remaining === 2) {
-      const replies = E.legalMoves(after);
-      ok = replies.length > 0 && replies.every(x => matesInOne(E.makeMove(after, x)).length > 0);
-    }
-  } else if (exp) {
-    ok = E.scoreMove(s, m, 3) >= E.scoreMove(s, exp, 3) - 30;
-  }
+  // Richtig ist genau der Lösungszug – oder ein anderer Zug, der sofort mattsetzt (wie bei Lichess)
+  const ok = sameMove(m, exp) || mate;
 
   if (!ok) {
-    puzzle.tries++;
+    puzzle.failed = true;
     const d = ratePuzzle(false);
     puzzle.state = after; puzzle.lastMove = m;
     ui.mark = { sq: m.to, cls: 'wrong' };
     render();
-    const why = joinReasons(explainMove(s, m).slice(0, 2));
     const reply = E.legalMoves(after).length ? E.bestMove(after, 3) : null;
-    const refute = reply ? ` Der Gegner würde mit <b>${de(E.toSAN(after, reply.move))}</b> antworten.` : '';
-    $('pzMsg').innerHTML = `<p class="bad">✗ ${de(E.toSAN(s, m))} ist nicht die Lösung.${d !== '' ? ` <span class="small">(${d} Wertung)</span>` : ''}</p><p class="small">Der Zug ${why}.${refute} ${p.mate ? 'Es gibt einen Weg zum Matt!' : 'Es gibt etwas Stärkeres!'}</p>${puzzle.tries >= 2 ? `<p class="small">💡 Hinweis: ${meta.hint}</p>` : ''}`;
+    const refute = reply ? ` Der Gegner hätte dann <b>${de(E.toSAN(after, reply.move))}</b>: Der Zug ${joinReasons(explainMove(after, reply.move).slice(0, 2))}.` : '';
+    $('pzMsg').innerHTML = `<p class="bad">✗ ${de(E.toSAN(s, m))} ist nicht richtig.${d !== '' ? ` <span class="small">(${d} Wertung)</span>` : ''}</p><p class="small">${refute} Versuch es noch einmal!</p>${!puzzle.hintShown ? `<p class="small">💡 ${meta.hint}</p>` : ''}`;
+    puzzle.hintShown = true;
     ui.busy = true;
     setTimeout(() => {
       ui.busy = false;
       puzzle.state = s; puzzle.lastMove = null; ui.mark = null;
       render();
-    }, 1100);
+    }, 1200);
     return;
   }
 
@@ -1118,31 +1138,31 @@ function puzzleMove(m) {
   ui.mark = { sq: m.to, cls: 'ok' };
   ui.arrows = []; ui.hintFrom = -1;
   render();
-  const done = mate || (!p.mate && puzzle.step >= p.sol.length);
-  if (done) {
+  if (mate || puzzle.step >= p.moves.length) {
     puzzle.solved = true;
-    const d = ratePuzzle(!puzzle.helped && puzzle.tries === 0);
-    $('pzMsg').innerHTML = `<p class="good">🎉 Gelöst${puzzle.tries || puzzle.helped ? '' : ' – beim ersten Versuch'}!${d !== '' ? ` <span class="small">(${d >= 0 ? '+' : ''}${d} Wertung)</span>` : ''}</p><p>${meta.explain}</p>`;
-    showToast(mate ? '♛ Schachmatt – gelöst!' : '🎉 Gelöst!', 1500);
+    const clean = !puzzle.failed && !puzzle.helped;
+    const d = ratePuzzle(clean);
+    $('pzMsg').innerHTML = `<p class="good">🎉 ${clean ? 'Gelöst – perfekt!' : 'Gelöst!'}${d !== '' ? ` <span class="small">(${d >= 0 ? '+' : ''}${d} Wertung)</span>` : ''}</p>
+      <p>Lösung: <b>${solutionSans(p)}</b></p><p class="small">Motive: ${meta.tags.join(', ')}</p>
+      <p class="small"><a href="https://lichess.org/training/${p.id}" target="_blank" rel="noopener">Rätsel ${p.id} auf Lichess</a></p>`;
+    showToast(mate ? '♛ Schachmatt – gelöst!' : '🎉 Gelöst!', 1300);
     const solved = loadSolved();
     if (!solved.includes(p.key)) { solved.push(p.key); saveSolved(solved); }
     return;
   }
-  $('pzMsg').innerHTML = `<p class="good">✓ ${de(E.toSAN(s, m))} – richtig! Weiter so.</p><p class="small">Mal sehen, wie der Gegner antwortet …</p>`;
+  $('pzMsg').innerHTML = `<p class="good">✓ ${de(E.toSAN(s, m))} – richtig! Weiter …</p>`;
   ui.busy = true;
   setTimeout(() => {
-    const depth = p.mate ? Math.max(2, 2 * (p.mate - puzzle.step)) : 3;
-    const r = E.bestMove(puzzle.state, Math.min(depth, 4));
-    ui.busy = false;
-    if (!r) return;
     const rs = puzzle.state;
-    puzzle.state = E.makeMove(rs, r.move);
-    puzzle.lastMove = r.move;
+    const r = uciToMove(rs, p.moves[puzzle.step]);
+    puzzle.state = E.makeMove(rs, r);
+    puzzle.lastMove = r;
+    puzzle.step++;
+    ui.busy = false;
     ui.mark = null;
     render();
-    const left = p.mate ? p.mate - puzzle.step : 0;
-    $('pzMsg').innerHTML = `<p>Gegner spielt <b>${de(E.toSAN(rs, r.move))}</b>.</p><p>Jetzt du! ${left === 1 ? 'Setz Matt!' : left > 1 ? `Noch ${left} Züge bis Matt.` : 'Hol dir den Gewinn!'}</p>`;
-  }, 700);
+    $('pzMsg').innerHTML = `<p class="good">✓ Richtig!</p><p>Gegner spielt <b>${de(E.toSAN(rs, r))}</b>. Und jetzt?</p>`;
+  }, 600);
 }
 
 // ===================== KI-Trainer (Fragen stellen) =====================
@@ -1246,10 +1266,9 @@ function buildContext() {
     parts.push(engineFacts(s, o.side));
   } else if (mode === 'puzzles' && puzzle.state && !$('puzzleView').hidden) {
     const p = ALL_PUZZLES[puzzle.idx], s = puzzle.state, meta = puzzleMeta(p);
-    parts.push(`MODUS: Taktik-Rätsel „${meta.title}“. Aufgabe: ${meta.goal}`);
-    parts.push(`Lösung (NICHT verraten! Gib nur schrittweise Hinweise, außer der Schüler bittet ausdrücklich um die Lösung): ${p.sol.map(de).join(', ')} (Gegenzüge spielt die Engine) – ${meta.explain}`);
-    parts.push(`Schwierigkeit: ${p.level}. Bisher richtig gespielte Lösungszüge des Schülers: ${puzzle.step}. Der Schüler spielt ${puzzle.me === 'w' ? 'Weiß' : 'Schwarz'}.`);
-    parts.push(puzzle.solved ? 'Der Schüler hat das Rätsel bereits gelöst.' : 'Der Schüler hat es noch nicht gelöst.');
+    parts.push(`MODUS: Taktik-Rätsel aus der Lichess-Datenbank (Wertung ${p.rating}). Der Schüler spielt ${meta.side}. Aufgabe: ${meta.goal} Motive: ${meta.tags.join(', ')}.`);
+    parts.push(`Komplette Lösung (NICHT verraten! Gib nur schrittweise Hinweise, außer der Schüler bittet ausdrücklich um die Lösung; Züge in Klammern sind Gegenzüge): ${solutionSans(p)}`);
+    parts.push(puzzle.solved ? 'Der Schüler hat das Rätsel gelöst.' : `Der Schüler hat bisher ${Math.floor((puzzle.step - 1) / 2)} Lösungszüge richtig gespielt.`);
     parts.push(`FEN: ${E.toFEN(s)}`);
     parts.push(`Figuren:\n${pieceListing(s)}`);
     parts.push(`Am Zug: ${s.turn === 'w' ? 'Weiß' : 'Schwarz'}`);
@@ -1547,8 +1566,10 @@ function init() {
   }));
   $('puzzleBack').onclick = () => showTab('puzzles');
   $('pzHint').onclick = () => {
+    if (puzzle.solved || ui.busy) return;
     const meta = puzzleMeta(ALL_PUZZLES[puzzle.idx]);
     puzzle.helped = true;
+    ratePuzzle(false);
     if (!puzzle.hintShown) { $('pzMsg').insertAdjacentHTML('beforeend', `<p class="small">💡 ${meta.hint}</p>`); puzzle.hintShown = true; }
     else { const m = puzzleSolution(); if (m) { ui.hintFrom = m.from; render(); } }
   };
@@ -1558,10 +1579,12 @@ function init() {
     ratePuzzle(false);
     const m = puzzleSolution();
     if (m) { ui.arrows = [{ from: m.from, to: m.to }]; ui.hintFrom = -1; render(); }
-    $('pzMsg').innerHTML = `<p>Der Pfeil zeigt den nächsten Lösungszug. Spiel ihn selbst!</p><p class="small">${puzzleMeta(ALL_PUZZLES[puzzle.idx]).explain}</p>`;
+    $('pzMsg').innerHTML = '<p>Der Pfeil zeigt den richtigen Zug. Spiel ihn selbst!</p>';
   };
   $('pzRetry').onclick = () => startPuzzle(puzzle.idx);
   $('trStart').onclick = () => nextTrainingPuzzle();
+  $('themeSel').innerHTML = THEME_FILTERS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+  $('themeSel').onchange = () => { puzzle.theme = $('themeSel').value; puzzle.shown = 40; renderPuzzleList(); };
   $('pzNext').onclick = () => {
     if (puzzle.training) { nextTrainingPuzzle(); return; }
     const vis = visiblePuzzles();

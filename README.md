@@ -10,10 +10,9 @@ Aufbau wie eine moderne Schach-App: Navigation links (auf dem Handy unten), gro�
 
 - **Neues Spiel**: Farbe Weiß / Schwarz / Zufall, 4 Computerstufen oder „Beide Seiten selbst“ (Analysebrett), Brettfarben Grün / Holz / Blau
 - **Zugliste mit Bewertungssymbolen** (📖 Theoriezug, ★ bester Zug, ✓ gut, ?! ungenau, ? Fehler, ?? grober Fehler) und Zusammenfassung am Spielende
-- **Über 200 Rätsel** – zusätzlich zu den handgemachten Aufgaben automatisch aus Engine-Partien erzeugt (`puzzles-gen.js`) und geprüft: Matt in 2, Gabeln, Opfer, stille Züge, Kombinationen über mehrere Züge
-- **Rätsel-Training mit Wertung** – bekommt Rätsel passend zur eigenen Stärke, Wertung steigt/sinkt wie bei Elo, Serien-Zähler
+- **3189 echte Rätsel aus der Lichess-Datenbank** (CC0, https://database.lichess.org/#puzzles) – aus echten Partien, mit eindeutiger Lösung und Wertung von echten Spielern (ca. 500–2700). Ablauf wie bei Lichess: Der Gegner zieht zuerst, dann muss genau der richtige Zug gefunden werden. Filter nach Schwierigkeit und Motiv (Gabel, Fesselung, Opfer, Zwischenzug, Zugzwang …)
+- **Rätsel-Training mit Wertung** – bekommt Rätsel passend zur eigenen Stärke, Elo-Wertung, Serien-Zähler
 - **Eröffnungen mit Varianten** – 48 Varianten; der Gegner wählt zufällig oder du suchst eine aus. Auch der Computer spielt dadurch abwechslungsreicher
-- **Rätsel in 3 Stufen** (Leicht / Mittel / Schwer) – auch mehrzügige Matt-in-2- und Matt-in-3-Aufgaben und Aufgaben mit Schwarz am Zug; die Engine spielt die Gegenzüge
 - **Eröffnungen nach Farbe filterbar** – 9 Lektionen speziell für Schwarz
 
 - **Spielen gegen den Computer** – 4 Stufen (Anfänger bis Meister)
@@ -31,6 +30,6 @@ Aufbau wie eine moderne Schach-App: Navigation links (auf dem Handy unten), gro�
 
 - `engine.js` – Schach-Engine (Zuggenerator, Bewertung, Alpha-Beta-Suche)
 - `data.js` – Eröffnungen (mit Varianten), handgemachte Rätsel und Tipps
-- `puzzles-gen.js` – automatisch erzeugte Rätsel
+- `puzzles-lichess.js` – Rätsel aus der Lichess-Datenbank (Lizenz CC0)
 - `app.js` – Oberfläche und Trainer-Logik
 - `style.css` – Design (heller und dunkler Modus)

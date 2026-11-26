@@ -274,6 +274,10 @@ button.link { border: 0; background: none; color: var(--accent); padding: 0; fon
 .pzrate:empty { display: none; }
 .pzrate { margin-bottom: 8px; font-weight: 600; }
 
+.selrow { padding: 8px 16px 0; }
+.selrow select { width: 100%; font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+.coach-msg a { color: var(--accent); }
+
 /* KI-Chat */
 .ask { margin-top: 4px; }
 #olAsk .ask, #pzAsk .ask { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 12px; }
