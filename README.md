@@ -10,6 +10,9 @@ Aufbau wie eine moderne Schach-App: Navigation links (auf dem Handy unten), gro�
 
 - **Neues Spiel**: Farbe Weiß / Schwarz / Zufall, 4 Computerstufen oder „Beide Seiten selbst“ (Analysebrett), Brettfarben Grün / Holz / Blau
 - **Zugliste mit Bewertungssymbolen** (📖 Theoriezug, ★ bester Zug, ✓ gut, ?! ungenau, ? Fehler, ?? grober Fehler) und Zusammenfassung am Spielende
+- **Über 200 Rätsel** – zusätzlich zu den handgemachten Aufgaben automatisch aus Engine-Partien erzeugt (`puzzles-gen.js`) und geprüft: Matt in 2, Gabeln, Opfer, stille Züge, Kombinationen über mehrere Züge
+- **Rätsel-Training mit Wertung** – bekommt Rätsel passend zur eigenen Stärke, Wertung steigt/sinkt wie bei Elo, Serien-Zähler
+- **Eröffnungen mit Varianten** – 48 Varianten; der Gegner wählt zufällig oder du suchst eine aus. Auch der Computer spielt dadurch abwechslungsreicher
 - **Rätsel in 3 Stufen** (Leicht / Mittel / Schwer) – auch mehrzügige Matt-in-2- und Matt-in-3-Aufgaben und Aufgaben mit Schwarz am Zug; die Engine spielt die Gegenzüge
 - **Eröffnungen nach Farbe filterbar** – 9 Lektionen speziell für Schwarz
 
@@ -27,6 +30,7 @@ Aufbau wie eine moderne Schach-App: Navigation links (auf dem Handy unten), gro�
 ## Dateien
 
 - `engine.js` – Schach-Engine (Zuggenerator, Bewertung, Alpha-Beta-Suche)
-- `data.js` – Eröffnungen, Rätsel und Tipps
+- `data.js` – Eröffnungen (mit Varianten), handgemachte Rätsel und Tipps
+- `puzzles-gen.js` – automatisch erzeugte Rätsel
 - `app.js` – Oberfläche und Trainer-Logik
 - `style.css` – Design (heller und dunkler Modus)

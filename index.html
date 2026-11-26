@@ -102,6 +102,7 @@
             <div><button id="openingBack" class="link">‹ Alle Eröffnungen</button><h2 id="olTitle"></h2><div id="olSide" class="status"></div></div>
           </header>
           <div class="pbody">
+            <div id="olVars" class="chiprow"></div>
             <p id="olIntro" class="intro"></p>
             <div class="coach">
               <div class="coach-avatar">🦉</div>
@@ -129,7 +130,13 @@
             <button data-f="Mittel">Mittel</button>
             <button data-f="Schwer">Schwer</button>
           </div>
-          <div class="pbody"><div id="puzzleList" class="card-list"></div></div>
+          <div class="pbody">
+            <div class="trainbox">
+              <div><div class="tr-l">Deine Rätsel-Wertung</div><div class="tr-r" id="trRating">800</div><div class="tr-s" id="trStreak"></div></div>
+              <button id="trStart" class="primary">🎯 Training starten</button>
+            </div>
+            <div id="puzzleList" class="card-list"></div>
+          </div>
         </div>
         <div id="puzzleView" class="view" hidden>
           <header class="ph">
@@ -137,6 +144,7 @@
             <span id="pzLevel" class="badge"></span>
           </header>
           <div class="pbody">
+            <div id="pzRatingNow" class="small pzrate"></div>
             <div id="pzTurn" class="turnbox"></div>
             <div class="coach">
               <div class="coach-avatar">🦉</div>
@@ -203,6 +211,7 @@
 
 <script src="engine.js"></script>
 <script src="data.js"></script>
+<script src="puzzles-gen.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

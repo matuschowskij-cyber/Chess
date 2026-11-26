@@ -260,6 +260,19 @@ button.link { border: 0; background: none; color: var(--accent); padding: 0; fon
 .turnbox.b { background: #3a3835; color: #f0efea; }
 .turnbox .piece { font-size: 1.8rem; }
 
+/* Varianten-Auswahl und Training */
+.chiprow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chiprow button { font-size: .78rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); font-weight: 600; }
+.chiprow button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.trainbox { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin-bottom: 12px; border-radius: 12px; background: var(--coach-bg); border: 1px solid var(--border); }
+.tr-l { font-size: .78rem; color: var(--muted); font-weight: 600; }
+.tr-r { font-size: 1.8rem; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tr-s { font-size: .8rem; color: var(--muted); }
+.trainbox button { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--accent-dark); font-weight: 700; white-space: nowrap; }
+.card .rt { font-weight: 600; font-size: .75rem; color: var(--muted); margin-left: 4px; }
+.pzrate:empty { display: none; }
+.pzrate { margin-bottom: 8px; font-weight: 600; }
+
 /* KI-Chat */
 .ask { margin-top: 4px; }
 #olAsk .ask, #pzAsk .ask { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 12px; }
