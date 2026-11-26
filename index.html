@@ -48,6 +48,7 @@
           <div>
             <h2 id="playTitle">Partie</h2>
             <div id="status" class="status"></div>
+            <div id="engineTag" class="engine-tag">🐟 Stockfish lädt …</div>
           </div>
           <span id="openingName" class="opening-tag"></span>
         </header>
@@ -73,7 +74,7 @@
           <div id="sub-moves" class="sub" hidden>
             <div id="moveList" class="movelist"></div>
             <div class="qlegend">
-              <span class="q q-book">📖</span> Theoriezug <span class="q q-best">★</span> bester Zug <span class="q q-good">✓</span> gut <span class="q q-inacc">?!</span> ungenau <span class="q q-mist">?</span> Fehler <span class="q q-blund">??</span> grober Fehler
+              <span class="q q-book">📖</span> Theoriezug <span class="q q-great">!!</span> einziger guter Zug <span class="q q-best">★</span> bester Zug <span class="q q-good">✓</span> gut <span class="q q-inacc">?!</span> ungenau <span class="q q-mist">?</span> Fehler <span class="q q-blund">??</span> grober Fehler
             </div>
           </div>
           <div id="sub-ask" class="sub" hidden></div>
@@ -191,10 +192,11 @@
     </div>
     <div class="label">Gegner</div>
     <div class="levelpick" id="ngLevel">
-      <button data-level="1"><span class="lv-ic">🐣</span><span class="lv-t">Anfänger</span><small>macht auch mal Fehler</small></button>
-      <button data-level="2"><span class="lv-ic">🙂</span><span class="lv-t">Fortgeschritten</span><small>spielt solide</small></button>
-      <button data-level="3"><span class="lv-ic">💪</span><span class="lv-t">Stark</span><small>bestraft Fehler</small></button>
-      <button data-level="4"><span class="lv-ic">🧠</span><span class="lv-t">Meister</span><small>rechnet tief</small></button>
+      <button data-level="1"><span class="lv-ic">🐣</span><span class="lv-t">Anfänger<small> · ca. 600</small></span></button>
+      <button data-level="2"><span class="lv-ic">🙂</span><span class="lv-t">Fortgeschritten<small> · ca. 1300</small></span></button>
+      <button data-level="3"><span class="lv-ic">💪</span><span class="lv-t">Stark<small> · ca. 1700</small></span></button>
+      <button data-level="4"><span class="lv-ic">🧠</span><span class="lv-t">Meister<small> · ca. 2200</small></span></button>
+      <button data-level="5"><span class="lv-ic">🐟</span><span class="lv-t">Stockfish volle Stärke<small> · 3000+</small></span></button>
       <button data-level="0"><span class="lv-ic">👥</span><span class="lv-t">Beide Seiten selbst</span><small>du ziehst Weiß und Schwarz</small></button>
     </div>
     <div class="label">Brett</div>

@@ -221,6 +221,9 @@ button.link { border: 0; background: none; color: var(--accent); padding: 0; fon
 .q { display: inline-block; min-width: 1.4em; padding: 0 3px; margin-left: 4px; border-radius: 4px; font-size: .72rem; font-weight: 800; text-align: center; color: #fff; }
 .q-best { background: var(--q-best); }
 .q-book { background: #a88865; }
+.q-great { background: #2a7fd4; }
+.engine-tag { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+.levelpick .lv-t small { display: inline; font-weight: 400; font-size: .75rem; color: var(--muted); }
 .q-good { background: var(--q-good); }
 .q-inacc { background: var(--q-inacc); }
 .q-mist { background: var(--q-mist); }
@@ -310,6 +313,7 @@ button.link { border: 0; background: none; color: var(--accent); padding: 0; fon
 .levelpick button { flex-direction: row; justify-content: flex-start; gap: 10px; padding: 8px 10px; text-align: left; }
 .levelpick button > small { display: none; }
 .levelpick .lv-ic { font-size: 1.5rem; }
+.levelpick button:nth-child(5) { grid-column: 1 / -1; }
 .levelpick button:last-child { grid-column: 1 / -1; }
 .dialog .seg { padding: 0; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }

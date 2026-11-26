@@ -39,7 +39,8 @@ for (const o of OPENINGS) {
 
 function isBookLine(sans) {
   const line = sans.map(E.cleanSAN).join(' ');
-  return OPENING_NAMES.some(([seq]) => seq === line || seq.startsWith(line + ' '));
+  // Fragwürdige Linien (frühe Damenausflüge) zählen nicht als Theorie
+  return OPENING_NAMES.some(([seq, name]) => !/Damen-Attacke|Schäfermatt/.test(name) && (seq === line || seq.startsWith(line + ' ')));
 }
 
 function openingNameFor(sans) {
@@ -238,8 +239,114 @@ function shakeBoard() {
   w.classList.remove('shake'); void w.offsetWidth; w.classList.add('shake');
 }
 
+// ===================== Stockfish (stärkste Engine, läuft im Browser) =====================
+// Fällt automatisch auf die eingebaute Engine zurück, wenn Stockfish nicht startet.
+const SF = { worker: null, ok: false, failed: false, queue: Promise.resolve(), listeners: [] };
+
+function sfInit() {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = ok => {
+      if (done) return;
+      done = true;
+      SF.ok = ok; SF.failed = !ok;
+      if (!ok && SF.worker) { try { SF.worker.terminate(); } catch (e) { /* egal */ } }
+      updateEngineTag();
+      resolve(ok);
+    };
+    try { SF.worker = new Worker('stockfish.js'); } catch (e) { finish(false); return; }
+    SF.worker.onmessage = e => { const line = String(e.data); for (const fn of SF.listeners.slice()) fn(line); };
+    SF.worker.onerror = () => finish(false);
+    const onLine = l => {
+      if (l === 'uciok') SF.worker.postMessage('isready');
+      if (l === 'readyok') { SF.listeners = SF.listeners.filter(f => f !== onLine); finish(true); }
+    };
+    SF.listeners.push(onLine);
+    SF.worker.postMessage('uci');
+    setTimeout(() => finish(false), 25000);
+  });
+}
+
+function updateEngineTag() {
+  const el = $('engineTag');
+  if (!el) return;
+  el.textContent = SF.ok ? '🐟 Stockfish 18' : SF.failed ? '⚙ Basis-Engine' : '🐟 Stockfish lädt …';
+  el.title = SF.ok ? 'Bewertungen und Computerzüge kommen von Stockfish 18' : 'Stockfish ist hier nicht verfügbar – die eingebaute Engine wird benutzt';
+}
+
+const mateToScore = n => (n > 0 ? E.MATE - n : -E.MATE - n);
+
+// Analysiert eine Stellung. Ergebnis: { best: 'e2e4', lines: [{ score, mate, pv: [...], depth }] } oder null
+function sfAnalyse(fen, opts) {
+  opts = opts || {};
+  const run = () => new Promise(resolve => {
+    if (!SF.ok) { resolve(null); return; }
+    const lines = [];
+    let finished = false;
+    const end = val => { if (finished) return; finished = true; SF.listeners = SF.listeners.filter(f => f !== onLine); resolve(val); };
+    const onLine = l => {
+      if (l.startsWith('info') && l.includes(' pv ') && l.includes(' score ')) {
+        const mpv = +((l.match(/ multipv (\d+)/) || [0, 1])[1]);
+        const sc = l.match(/ score (cp|mate) (-?\d+)/);
+        const depth = +((l.match(/ depth (\d+)/) || [0, 0])[1]);
+        const pv = l.split(' pv ')[1].trim().split(/\s+/);
+        if (sc) lines[mpv - 1] = { score: sc[1] === 'mate' ? mateToScore(+sc[2]) : +sc[2], mate: sc[1] === 'mate' ? +sc[2] : null, pv, depth };
+      } else if (l.startsWith('bestmove')) {
+        const b = l.split(' ')[1];
+        end({ best: b && b !== '(none)' ? b : null, lines: lines.filter(Boolean) });
+      }
+    };
+    SF.listeners.push(onLine);
+    const w = SF.worker;
+    w.postMessage(`setoption name MultiPV value ${opts.multipv || 1}`);
+    if (opts.elo) {
+      w.postMessage('setoption name UCI_LimitStrength value true');
+      w.postMessage(`setoption name UCI_Elo value ${opts.elo}`);
+    } else w.postMessage('setoption name UCI_LimitStrength value false');
+    w.postMessage(`setoption name Skill Level value ${opts.skill !== undefined ? opts.skill : 20}`);
+    w.postMessage(`position fen ${fen}`);
+    w.postMessage(opts.depth ? `go depth ${opts.depth}` : `go movetime ${opts.movetime || 500}`);
+    setTimeout(() => { try { w.postMessage('stop'); } catch (e) { /* egal */ } }, (opts.movetime || 3000) + 4000);
+    setTimeout(() => end(null), (opts.movetime || 3000) + 9000);
+  });
+  const p = SF.queue.then(run, run);
+  SF.queue = p.catch(() => null);
+  return p;
+}
+
+// Bester Zug (Stockfish, sonst eingebaute Engine): { move, score, pv }
+async function engineBest(s, ms) {
+  if (SF.ok) {
+    const r = await sfAnalyse(E.toFEN(s), { movetime: ms || 700 });
+    const m = r && uciToMove(s, r.best);
+    if (m) return { move: m, score: r.lines[0] ? r.lines[0].score : 0, pv: r.lines[0] ? r.lines[0].pv : [] };
+  }
+  return E.bestMove(s, 3);
+}
+
+// Wandelt eine Stockfish-Hauptvariante in deutsche Notation um
+function pvToSan(s, pv, max) {
+  const out = [];
+  let st = s;
+  for (const u of (pv || []).slice(0, max || 6)) {
+    const m = uciToMove(st, u);
+    if (!m) break;
+    const num = st.turn === 'w' ? `${st.full}. ` : (out.length ? '' : `${st.full}… `);
+    out.push(num + de(E.toSAN(st, m)));
+    st = E.makeMove(st, m);
+  }
+  return out.join(' ');
+}
+
+// Gewinnchance in Prozent (wie bei Lichess) – Grundlage für die Zugbewertung
+const winPct = cp => {
+  const c = cp > E.MATE - 1000 ? 1500 : cp < -E.MATE + 1000 ? -1500 : Math.max(-1500, Math.min(1500, cp));
+  return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * c)) - 1);
+};
+const moveAccuracy = drop => Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * drop) - 3.1669));
+
 // ===================== Spiel gegen Computer =====================
-const LEVELS = { 0: 'Beide Seiten selbst', 1: 'Anfänger', 2: 'Fortgeschritten', 3: 'Stark', 4: 'Meister' };
+const LEVELS = { 0: 'Beide Seiten selbst', 1: 'Anfänger', 2: 'Fortgeschritten', 3: 'Stark', 4: 'Meister', 5: 'Stockfish' };
 const settings = { color: 'w', level: 2, board: 'green' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('schach-settings') || '{}')); } catch (e) { /* egal */ }
 function saveSettings() { try { localStorage.setItem('schach-settings', JSON.stringify(settings)); } catch (e) { /* egal */ } }
@@ -265,7 +372,8 @@ function newGame(fromStates, fromMoves, fromSans, playerColor, level) {
   game.moves = fromMoves ? fromMoves.slice() : [];
   game.sans = fromSans ? fromSans.slice() : [];
   game.quals = new Array(game.sans.length).fill(null);
-  game.over = false; game.hintStep = 0;
+  game.accs = new Array(game.sans.length).fill(null);
+  game.over = false; game.hintStep = 0; game.hintCache = null;
   game.lastOpening = openingNameFor(game.sans);
   chat.turns = [];
   $('chatLog').innerHTML = '';
@@ -310,10 +418,11 @@ function pushMove(m) {
   game.moves.push(m);
   game.sans.push(san);
   game.quals.push(null);
+  game.accs.push(null);
   return san;
 }
 
-const QBADGE = { book: ['q-book', '📖', ''], best: ['q-best', '★', '★ Bester Zug!'], good: ['q-good', '✓', ''], inaccurate: ['q-inacc', '?!', ''], mistake: ['q-mist', '?', '? Fehler'], blunder: ['q-blund', '??', '?? Grober Fehler'] };
+const QBADGE = { great: ['q-great', '!!', '‼ Einziger guter Zug!'], book: ['q-book', '📖', ''], best: ['q-best', '★', '★ Bester Zug!'], good: ['q-good', '✓', ''], inaccurate: ['q-inacc', '?!', ''], mistake: ['q-mist', '?', '? Fehler'], blunder: ['q-blund', '??', '?? Grober Fehler'] };
 
 function playerMove(m) {
   const before = curState();
@@ -321,13 +430,14 @@ function playerMove(m) {
   pushMove(m);
   game.hintStep = 0;
   render();
-  updatePlayUI();
+  updatePlayUI(true);
   ui.busy = true;
-  setStatus('Trainer bewertet deinen Zug', true);
-  later(() => {
+  setStatus(SF.ok ? 'Stockfish bewertet deinen Zug' : 'Trainer bewertet deinen Zug', true);
+  later(async () => {
     game.lastQuality = 'best';
-    const fb = coachFeedback(before, m, histBefore);
+    const fb = await coachFeedback(before, m, histBefore);
     game.quals[game.quals.length - 1] = game.lastQuality;
+    game.accs[game.accs.length - 1] = game.lastAcc;
     setCoach(fb);
     showSub('coach');
     const toast = QBADGE[game.lastQuality] && QBADGE[game.lastQuality][2];
@@ -340,7 +450,7 @@ function playerMove(m) {
         if (th) appendCoach(`<p class="warn">⚠ Jetzt ist ${s.turn === 'w' ? 'Weiß' : 'Schwarz'} am Zug. Achtung, Drohung: ${th.text}.</p>`);
         else appendCoach(`<p class="small">Jetzt ist <b>${s.turn === 'w' ? 'Weiß' : 'Schwarz'}</b> am Zug.</p>`);
         render();
-      } else later(computerMove, 350);
+      } else later(computerMove, 250);
     }
     updatePlayUI();
   }, 30);
@@ -350,10 +460,11 @@ function computerMove() {
   if (game.over || twoPlayer() || curState().turn === game.player) return;
   ui.busy = true;
   setStatus('Computer denkt nach', true);
-  later(() => {
+  later(async () => {
     const s = curState();
-    const m = chooseComputerMove(s);
+    const m = await chooseComputerMove(s);
     ui.busy = false;
+    if (curState() !== s) return; // inzwischen zurückgenommen
     if (!m) { checkGameOver(); return; }
     const san = pushMove(m);
     render();
@@ -386,9 +497,11 @@ function bookMove(s) {
   return E.moveFromSAN(s, pick(cands));
 }
 
-function chooseComputerMove(s) {
+// Spielstärke je Stufe: 1 = eingebaute Engine mit Fehlern, 2–4 = Stockfish mit begrenzter Stärke, 5 = Stockfish voll
+const SF_LEVEL = { 2: { skill: 3, movetime: 300 }, 3: { elo: 1700, movetime: 600 }, 4: { elo: 2200, movetime: 900 }, 5: { movetime: 1500 } };
+async function chooseComputerMove(s) {
   const lvl = game.level;
-  if (lvl >= 2 && Math.random() < 0.85) {
+  if (lvl >= 2 && Math.random() < (lvl === 5 ? 0.5 : 0.85)) {
     const bm = bookMove(s);
     if (bm) return bm;
   }
@@ -399,16 +512,16 @@ function chooseComputerMove(s) {
     if (Math.random() < 0.2) return pick(res.slice(0, Math.max(1, Math.ceil(res.length / 2)))).move;
     return pick(res.filter(r => r.score >= res[0].score - 120)).move;
   }
+  if (SF.ok) {
+    const r = await sfAnalyse(E.toFEN(s), SF_LEVEL[lvl] || SF_LEVEL[5]);
+    const m = r && uciToMove(s, r.best);
+    if (m) return m;
+  }
+  // Ersatz: eingebaute Engine
   if (lvl === 2) {
     const res = E.analyzeAll(s, 2);
     if (!res.length) return null;
     return pick(res.filter(r => r.score >= res[0].score - 25)).move;
-  }
-  if (game.sans.length < 16) {
-    // Früh in der Partie: unter fast gleich guten Zügen zufällig wählen, damit nicht jede Partie gleich läuft
-    const top = E.analyzeAll(s, 2).slice(0, 4).map(r => ({ m: r.move, sc: E.scoreMove(s, r.move, 3) }));
-    top.sort((a, b) => b.sc - a.sc);
-    if (top.length) return pick(top.filter(x => x.sc >= top[0].sc - 20)).m;
   }
   const r = E.bestMove(s, lvl === 3 ? 3 : 4);
   return r ? r.move : null;
@@ -504,56 +617,89 @@ function describeThreat(s, color) {
   return { san, move: th.move, mate, text: mate ? `${san} mit Matt` : `${san} – ${joinReasons(explainMove(th.state, th.move).slice(0, 2))}` };
 }
 
-function coachFeedback(before, m, prevMoves) {
+// Bewertet einen Zug: bester Zug, Bewertung vorher/nachher, beste Antwort des Gegners
+async function analyseMove(before, m) {
+  const after = E.makeMove(before, m);
+  const afterLegal = E.legalMoves(after);
+  if (SF.ok) {
+    const a = await sfAnalyse(E.toFEN(before), { movetime: 900, multipv: 2 });
+    if (a && a.lines.length) {
+      const best = uciToMove(before, a.lines[0].pv[0]) || m;
+      const bestScore = a.lines[0].score;
+      const secondScore = a.lines[1] ? a.lines[1].score : null;
+      let myScore, reply = null, replyScore = null;
+      const idx = a.lines.findIndex(l => sameMove(uciToMove(before, l.pv[0]), m));
+      if (!afterLegal.length) myScore = E.inCheck(after, after.turn) ? E.MATE : 0;
+      else if (idx >= 0) { myScore = a.lines[idx].score; reply = uciToMove(after, a.lines[idx].pv[1]); }
+      else {
+        const b = await sfAnalyse(E.toFEN(after), { movetime: 700 });
+        myScore = b && b.lines[0] ? -b.lines[0].score : bestScore;
+        reply = b && uciToMove(after, b.best);
+        replyScore = b && b.lines[0] ? b.lines[0].score : null;
+      }
+      return { best, bestScore, secondScore, myScore, reply, replyScore, pv: a.lines[0].pv, sf: true };
+    }
+  }
+  const b = E.bestMove(before, 3);
+  const myScore = sameMove(b.move, m) ? b.score : E.scoreMove(before, m, 3);
+  const r = afterLegal.length ? E.bestMove(after, 3) : null;
+  return { best: b.move, bestScore: b.score, secondScore: null, myScore, reply: r && r.move, replyScore: r && r.score, sf: false };
+}
+
+async function coachFeedback(before, m, prevMoves) {
   const me = before.turn;
   const legal = E.legalMoves(before);
   const san = E.toSAN(before, m, legal);
   const after = E.makeMove(before, m);
   const parts = [];
+  game.lastAcc = 100;
 
   if (!E.legalMoves(after).length) {
+    game.lastQuality = 'best';
     if (E.inCheck(after, after.turn)) return '<p class="good">♛ Schachmatt! Du hast gewonnen – großartig!</p>';
     return '<p class="warn">Patt! Der Gegner hat keinen Zug, steht aber nicht im Schach – das ist ein Remis.</p>';
   }
 
-  const best = E.bestMove(before, 3);
-  const myScore = sameMove(best.move, m) ? best.score : E.scoreMove(before, m, 3);
-  const loss = best.score - myScore;
-  const bestSan = de(E.toSAN(before, best.move, legal));
+  const A = await analyseMove(before, m);
+  const isBest = sameMove(A.best, m);
+  const drop = isBest ? 0 : Math.max(0, winPct(A.bestScore) - winPct(A.myScore));
+  game.lastAcc = moveAccuracy(drop);
+  const bestSan = de(E.toSAN(before, A.best, legal));
   let quality;
-  if (sameMove(best.move, m) || loss <= 15) quality = 'best';
-  else if (loss <= 50) quality = 'good';
-  else if (loss <= 130) quality = 'inaccurate';
-  else if (loss <= 300) quality = 'mistake';
+  if (isBest || drop < 2) {
+    const onlyMove = isBest && A.secondScore !== null && winPct(A.bestScore) - winPct(A.secondScore) >= 15 && winPct(A.bestScore) >= 25;
+    quality = onlyMove ? 'great' : 'best';
+  } else if (drop < 10) quality = 'good';
+  else if (drop < 20) quality = 'inaccurate';
+  else if (drop < 30) quality = 'mistake';
   else quality = 'blunder';
-  const book = mode === 'play' && quality !== 'best' && isBookLine(game.sans);
-  if (book) quality = 'book';
+  if (mode === 'play' && quality !== 'best' && quality !== 'great' && drop < 10 && isBookLine(game.sans)) quality = 'book';
   game.lastQuality = quality;
 
   const mineWhy = joinReasons(explainMove(before, m));
-  const bestWhy = joinReasons(explainMove(before, best.move));
+  const bestWhy = joinReasons(explainMove(before, A.best));
   let problem = '';
-  if (quality === 'mistake' || quality === 'blunder' || quality === 'inaccurate') {
-    const reply = E.bestMove(after, 3);
-    if (reply && reply.move) {
-      const rsan = de(E.toSAN(after, reply.move));
-      problem = reply.score > E.MATE - 100
-        ? `Der Gegner kann jetzt mit <b>${rsan}</b> Matt setzen!`
-        : `Die beste Antwort des Gegners ist <b>${rsan}</b>: Der Zug ${joinReasons(explainMove(after, reply.move).slice(0, 2))}.`;
-    }
+  if ((quality === 'mistake' || quality === 'blunder' || quality === 'inaccurate') && A.reply) {
+    const rsan = de(E.toSAN(after, A.reply));
+    problem = A.myScore < -E.MATE + 1000
+      ? `Der Gegner kann jetzt mit <b>${rsan}</b> ein Matt erzwingen!`
+      : `Die beste Antwort des Gegners ist <b>${rsan}</b>: Der Zug ${joinReasons(explainMove(after, A.reply).slice(0, 2))}.`;
   }
+  const bestLine = A.pv && A.pv.length > 1 ? ` <span class="small">(Idee: ${pvToSan(before, A.pv, 5)})</span>` : '';
 
   const praise = ['Sehr gut!', 'Stark!', 'Top-Zug!', 'Genau richtig!', 'Prima!'];
-  const evalLine = `<p class="small">Bewertung für dich: ${fmtScore(best.score)} möglich, nach deinem Zug ${fmtScore(myScore)}${loss > 15 ? ` (Verlust ${(loss / 100).toFixed(1)} Bauern)` : ''}.</p>`;
+  const src = A.sf ? 'Stockfish' : 'Engine';
+  const evalLine = `<p class="small">${src}: ${fmtScore(A.bestScore)} möglich, nach deinem Zug ${fmtScore(A.myScore)} · Gewinnchance −${drop.toFixed(0)} % · Genauigkeit ${game.lastAcc.toFixed(0)} %</p>`;
   if (quality === 'book') parts.push(`<p class="good">📖 ${de(san)} – Theoriezug!</p><p>Genau so spielt man das in der <b>${openingNameFor(game.sans) || 'Eröffnung'}</b>. Dein Zug ${mineWhy}.</p>`);
+  else if (quality === 'great') parts.push(`<p class="good">‼ ${de(san)} – Großartig! Das war der <b>einzige</b> gute Zug in dieser Stellung.</p><p>Dein Zug ${mineWhy}.</p>`);
   else if (quality === 'best') parts.push(`<p class="good">⭐ ${de(san)} – ${pick(praise)} Das ist der beste Zug.</p><p>Dein Zug ${mineWhy}.</p>`);
-  else if (quality === 'good') parts.push(`<p class="good">👍 ${de(san)} – Guter Zug.</p><p>Dein Zug ${mineWhy}. Noch etwas besser war <b>${bestSan}</b> (${bestWhy}).</p>`);
-  else if (quality === 'inaccurate') parts.push(`<p class="warn">🤔 ${de(san)} – Etwas ungenau.</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p>`);
-  else if (quality === 'mistake') parts.push(`<p class="warn">❗ ${de(san)} – Ein Fehler.</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p>`);
-  else parts.push(`<p class="bad">❌ ${de(san)} – Grober Fehler!</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.</p><p class="small">Tipp: Mit „↶ Zurück“ kannst du den Zug zurücknehmen.</p>`);
+  else if (quality === 'good') parts.push(`<p class="good">👍 ${de(san)} – Guter Zug.</p><p>Dein Zug ${mineWhy}. Am stärksten war <b>${bestSan}</b> (${bestWhy}).${bestLine}</p>`);
+  else if (quality === 'inaccurate') parts.push(`<p class="warn">🤔 ${de(san)} – Ungenau.</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.${bestLine}</p>`);
+  else if (quality === 'mistake') parts.push(`<p class="warn">❗ ${de(san)} – Ein Fehler.</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.${bestLine}</p>`);
+  else parts.push(`<p class="bad">❌ ${de(san)} – Grober Fehler!</p><p>${problem}</p><p>Besser war <b>${bestSan}</b>: Der Zug ${bestWhy}.${bestLine}</p><p class="small">Tipp: Mit „↶ Zurück“ kannst du den Zug zurücknehmen.</p>`);
   parts.push(evalLine);
 
-  if (quality === 'best' || quality === 'good' || quality === 'inaccurate' || quality === 'book') {
+  if (['best', 'great', 'good', 'inaccurate', 'book'].includes(quality)) {
     const tip = principleTip(before, m, prevMoves, me);
     if (tip) parts.push(`<p class="small">💬 ${tip}</p>`);
   }
@@ -609,7 +755,9 @@ function checkGameOver() {
     game.over = true;
     const q = game.quals.filter(Boolean);
     const cnt = k => q.filter(x => x === k).length;
-    const summary = q.length ? `<p class="small">Deine Partie: ${cnt('best')}× ★ bester Zug, ${cnt('good')}× ✓ gut, ${cnt('inaccurate')}× ungenau, ${cnt('mistake')}× Fehler, ${cnt('blunder')}× grober Fehler.</p>` : '';
+    const accs = game.accs.filter(x => x !== null && x !== undefined);
+    const accTxt = accs.length ? `<p><b>Deine Genauigkeit: ${(accs.reduce((a, b) => a + b, 0) / accs.length).toFixed(0)} %</b></p>` : '';
+    const summary = q.length ? accTxt + `<p class="small">Deine Partie: ${cnt('great')}× ‼ einziger Zug, ${cnt('best')}× ★ bester Zug, ${cnt('good')}× ✓ gut, ${cnt('inaccurate')}× ungenau, ${cnt('mistake')}× Fehler, ${cnt('blunder')}× grober Fehler.</p>` : '';
     appendCoach(msg + summary + '<p class="small">Mit „＋ Neu“ startest du ein neues Spiel.</p>');
     if (toast) showToast(toast, 2200);
     render();
@@ -626,7 +774,7 @@ function setStatus(text, thinking, mine) {
   el.classList.toggle('mine', !!mine);
 }
 
-function updatePlayUI() {
+function updatePlayUI(skipEval) {
   const s = curState();
   const side = s.turn === 'w' ? 'Weiß' : 'Schwarz';
   if (game.over) setStatus('Spiel beendet');
@@ -654,40 +802,53 @@ function updatePlayUI() {
 
   $('undoBtn').disabled = game.moves.length === 0 || ui.busy;
   $('hintBtn').disabled = game.over || !playContext().canMove();
-  updateEval();
+  updateEval(skipEval);
 }
 
-function updateEval() {
-  const s = curState();
-  let white;
-  if (game.over) {
-    const legal = E.legalMoves(s);
-    white = !legal.length && E.inCheck(s, s.turn) ? (s.turn === 'w' ? -E.MATE : E.MATE) : 0;
-  } else {
-    const r = E.bestMove(s, 2);
-    white = r ? (s.turn === 'w' ? r.score : -r.score) : 0;
-  }
+let evalToken = 0;
+function showEval(white, depth) {
   const pct = Math.max(3, Math.min(97, 50 + 50 * Math.tanh(white / 600)));
   $('evalFill').style.height = pct + '%';
   $('evalV').classList.toggle('flipped', ui.orientation === 'b');
-  const mate = Math.abs(white) > E.MATE - 100;
+  const mate = Math.abs(white) > E.MATE - 1000;
   $('evalNum').textContent = mate ? 'M' : (Math.abs(white) / 100).toFixed(1);
   $('evalNum').style.color = white >= 0 ? '#403d39' : '#f4f2ec';
   $('evalNum').style.bottom = white >= 0 ? '2px' : 'auto';
   $('evalNum').style.top = white >= 0 ? 'auto' : '2px';
   let txt;
-  if (mate) txt = white > 0 ? 'Weiß setzt bald matt' : 'Schwarz setzt bald matt';
-  else if (Math.abs(white) < 60) txt = 'Die Stellung ist ausgeglichen';
+  if (mate) txt = `${white > 0 ? 'Weiß' : 'Schwarz'} setzt matt${Math.abs(white) < E.MATE ? ` in ${E.MATE - Math.abs(white)}` : ''}`;
+  else if (Math.abs(white) < 50) txt = 'Die Stellung ist ausgeglichen';
   else {
     const v = Math.abs(white);
     txt = `${white > 0 ? 'Weiß' : 'Schwarz'} ${v < 150 ? 'steht etwas besser' : v < 400 ? 'steht besser' : 'steht klar besser'} (${(white > 0 ? '+' : '−') + (v / 100).toFixed(1)})`;
   }
-  $('evalText').textContent = '📊 ' + txt;
+  $('evalText').textContent = '📊 ' + txt + (depth ? ` · Stockfish Tiefe ${depth}` : '');
+}
+
+function updateEval(skip) {
+  const s = curState();
+  const tok = ++evalToken;
+  $('evalV').classList.toggle('flipped', ui.orientation === 'b');
+  if (game.over) {
+    const legal = E.legalMoves(s);
+    showEval(!legal.length && E.inCheck(s, s.turn) ? (s.turn === 'w' ? -E.MATE : E.MATE) : 0);
+    return;
+  }
+  if (skip) return;
+  if (SF.ok) {
+    sfAnalyse(E.toFEN(s), { movetime: 350 }).then(r => {
+      if (tok !== evalToken || curState() !== s || !r || !r.lines[0]) return;
+      showEval(s.turn === 'w' ? r.lines[0].score : -r.lines[0].score, r.lines[0].depth);
+    });
+  } else {
+    const r = E.bestMove(s, 2);
+    showEval(r ? (s.turn === 'w' ? r.score : -r.score) : 0);
+  }
 }
 
 function undo() {
   if (!game.moves.length || ui.busy) return;
-  const pop = () => { game.states.pop(); game.moves.pop(); game.sans.pop(); game.quals.pop(); };
+  const pop = () => { game.states.pop(); game.moves.pop(); game.sans.pop(); game.quals.pop(); game.accs.pop(); };
   if (twoPlayer()) pop();
   else {
     do { pop(); } while (game.moves.length && curState().turn !== game.player);
@@ -711,26 +872,28 @@ function hint() {
   setStatus('Trainer sucht einen guten Zug', true);
   ui.busy = true;
   showSub('coach');
-  later(() => {
-    const r = E.bestMove(s, 3);
+  later(async () => {
+    const r = game.hintCache && game.hintCache.s === s ? game.hintCache.r : await engineBest(s, 1000);
+    game.hintCache = { s, r };
     ui.busy = false;
-    updatePlayUI();
-    if (!r) return;
+    updatePlayUI(true);
+    if (!r || !r.move) return;
     const m = r.move;
     const t = E.typeOf(m.piece);
     if (game.hintStep === 0) {
       ui.hintFrom = m.from; ui.arrows = [];
       game.hintStep = 1;
       let txt = `Schau dir ${t === 'q' ? 'die' : 'den'} <b>${NAME[t]}</b> auf ${E.sqName(m.from)} an (orange markiert). Wohin könnte ${t === 'q' ? 'sie' : 'er'} ziehen?`;
-      if (r.score > E.MATE - 100) txt = 'Hier gibt es ein Matt! ' + txt;
+      if (r.score > E.MATE - 1000) txt = 'Hier gibt es ein erzwungenes Matt! ' + txt;
       appendCoach(`<p>💡 ${txt} <span class="small">Drück nochmal auf Tipp für die Lösung.</span></p>`);
     } else {
       ui.hintFrom = -1; ui.arrows = [{ from: m.from, to: m.to }];
       const san = de(E.toSAN(s, m));
       const ns = E.makeMove(s, m);
-      const why = r.score > E.MATE - 100 && !(E.inCheck(ns, ns.turn) && !E.legalMoves(ns).length)
+      const why = r.score > E.MATE - 1000 && !(E.inCheck(ns, ns.turn) && !E.legalMoves(ns).length)
         ? 'Er führt zu einem erzwungenen Matt!' : `Der Zug ${joinReasons(explainMove(s, m))}.`;
-      appendCoach(`<p>💡 Mein Vorschlag: <b>${san}</b>. ${why} <span class="small">(Bewertung ${fmtScore(r.score)})</span></p>`);
+      const line = r.pv && r.pv.length > 1 ? ` <span class="small">Idee: ${pvToSan(s, r.pv, 6)}</span>` : '';
+      appendCoach(`<p>💡 Mein Vorschlag: <b>${san}</b>. ${why} <span class="small">(Bewertung ${fmtScore(r.score)})</span>${line}</p>`);
     }
     render();
   }, 30);
@@ -1346,23 +1509,22 @@ const CHAT_TOOLS = [
     name: 'pruefe_zug',
     description: 'Prüft einen Zug in der aktuellen Brettstellung mit der Schach-Engine (für die Seite, die am Zug ist). Akzeptiert deutsche (Sf3), englische (Nf3) oder Koordinaten-Notation (g1f3). Liefert, ob er legal ist, seine Bewertung, was er bewirkt, die beste Antwort des Gegners und den besten Zug zum Vergleich.',
     inputSchema: { type: 'object', properties: { zug: { type: 'string', description: 'Der Zug, z. B. "Sf3", "exd5", "O-O" oder "e2e4"' } }, required: ['zug'] },
-    execute(input) {
+    async execute(input) {
       const s = currentBoardState();
       const m = parseUserMove(s, input.zug);
       if (!m) throw new Error(`"${input.zug}" ist in dieser Stellung kein legaler Zug für ${s.turn === 'w' ? 'Weiß' : 'Schwarz'}.`);
       const legal = E.legalMoves(s);
-      const best = E.bestMove(s, 3);
-      const sc = sameMove(best.move, m) ? best.score : E.scoreMove(s, m, 3);
       const after = E.makeMove(s, m);
-      const reply = E.legalMoves(after).length ? E.bestMove(after, 3) : null;
+      const A = await analyseMove(s, m);
       return {
+        quelle: A.sf ? 'Stockfish 18' : 'eingebaute Engine',
         zug: de(E.toSAN(s, m, legal)),
         von_nach: `${E.sqName(m.from)}→${E.sqName(m.to)}`,
-        bewertung_fuer_ziehende_seite: fmtScore(sc),
+        bewertung_fuer_ziehende_seite: fmtScore(A.myScore),
         was_der_zug_bewirkt: explainMove(s, m),
-        beste_antwort_des_gegners: reply ? `${de(E.toSAN(after, reply.move))}: ${joinReasons(explainMove(after, reply.move))}` : (E.inCheck(after, after.turn) ? 'keine – Schachmatt' : 'keine – Patt'),
-        bester_zug_zum_vergleich: `${de(E.toSAN(s, best.move, legal))} (${fmtScore(best.score)}): ${joinReasons(explainMove(s, best.move))}`,
-        verlust_gegenueber_bestem_zug_in_bauern: Math.max(0, (best.score - sc) / 100).toFixed(1),
+        beste_antwort_des_gegners: A.reply ? `${de(E.toSAN(after, A.reply))}: ${joinReasons(explainMove(after, A.reply))}` : (E.inCheck(after, after.turn) && !E.legalMoves(after).length ? 'keine – Schachmatt' : 'unbekannt'),
+        bester_zug_zum_vergleich: `${de(E.toSAN(s, A.best, legal))} (${fmtScore(A.bestScore)}): ${joinReasons(explainMove(s, A.best))}${A.pv ? ' – Linie: ' + pvToSan(s, A.pv, 6) : ''}`,
+        verlust_an_gewinnchance_prozent: Math.max(0, winPct(A.bestScore) - winPct(A.myScore)).toFixed(0),
       };
     },
   },
@@ -1399,8 +1561,19 @@ async function ask(question) {
   $('askStop').hidden = false;
   $('askNote').textContent = '';
   chat.ctl = new AbortController();
+  let sfTxt = '';
+  if (SF.ok && (mode === 'play' || (mode === 'openings' && !$('openingLesson').hidden))) {
+    const st = currentBoardState();
+    if (E.legalMoves(st).length) {
+      const r = await sfAnalyse(E.toFEN(st), { movetime: 1200, multipv: 3 });
+      if (r && r.lines.length) {
+        sfTxt = `\n\nSTOCKFISH 18 (stärkste Engine, Tiefe ${r.lines[0].depth}; diese Daten sind die genaueste Quelle, Bewertung aus Sicht der Seite am Zug):\n` +
+          r.lines.map((l, k) => `${k + 1}. ${pvToSan(st, l.pv, 8)}  (${fmtScore(l.score)})`).join('\n');
+      }
+    }
+  }
   const input = [
-    { role: 'user', content: `${INSTRUCTIONS}\n\n===== AKTUELLE SITUATION / ENGINE-DATEN =====\n${buildContext()}` },
+    { role: 'user', content: `${INSTRUCTIONS}\n\n===== AKTUELLE SITUATION / ENGINE-DATEN =====\n${buildContext()}${sfTxt}` },
     ...chat.turns.slice(-8),
     { role: 'user', content: question },
   ];
@@ -1610,6 +1783,7 @@ function init() {
       newGame(states, moves, sans, data.player, Number(data.level) || 0);
     } else newGame();
     initChat();
+    sfInit().then(ok => { if (ok && mode === 'play') updatePlayUI(); });
   };
   if (hot && typeof hot.ready === 'function') hot.ready(start);
   else start(hot && hot.data ? hot.data : {});

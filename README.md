@@ -2,7 +2,13 @@
 
 Ein Lernspiel für Schach-Einsteiger – läuft komplett im Browser, ohne Installation.
 
-**Starten:** `index.html` im Browser öffnen (Doppelklick genügt).
+**Starten:** `index.html` im Browser öffnen. Damit Stockfish läuft, über einen Webserver öffnen (z. B. `python3 -m http.server` im Ordner, dann http://localhost:8000).
+
+## Engine
+
+Computergegner, Zugbewertung, Tipps und Bewertungsbalken laufen mit **Stockfish 18** (Lite, single-threaded, WebAssembly, direkt im Browser; Dateien `stockfish.js` / `stockfish.wasm` aus dem npm-Paket `stockfish` 18.0.8, Lizenz GPLv3 – siehe `STOCKFISH-LICENSE.txt`, Quelle: https://github.com/nmrugg/stockfish.js). Zugbewertung nach Gewinnchance wie bei Lichess (‼ einziger guter Zug, ?! ungenau, ? Fehler, ?? grober Fehler) und Genauigkeit in Prozent. Startet Stockfish nicht (z. B. beim direkten Öffnen der Datei ohne Webserver), springt die eingebaute Engine (`engine.js`) ein. Hinweis: Lokal am besten über einen kleinen Webserver öffnen, z. B. `python3 -m http.server`.
+
+Spielstufen: Anfänger (eingebaute Engine mit Fehlern), Fortgeschritten (Stockfish Skill 3), Stark (~1700), Meister (~2200), Stockfish volle Stärke.
 
 ## Funktionen
 
