@@ -270,6 +270,7 @@ button.link { border: 0; background: none; color: var(--accent); padding: 0; fon
 .tr-s { font-size: .8rem; color: var(--muted); }
 .trainbox button { padding: 10px 14px; border-radius: 10px; border: 1px solid var(--accent-dark); font-weight: 700; white-space: nowrap; }
 .card .rt { font-weight: 600; font-size: .75rem; color: var(--muted); margin-left: 4px; }
+.card-list .more { padding: 10px; border-radius: 10px; border: 1px dashed var(--border); background: none; color: var(--accent); font-weight: 700; }
 .pzrate:empty { display: none; }
 .pzrate { margin-bottom: 8px; font-weight: 600; }
 

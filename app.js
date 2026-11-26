@@ -985,7 +985,8 @@ function renderPuzzleList() {
   $('pzProgress').textContent = `${ALL_PUZZLES.filter(p => solved.includes(p.key)).length} von ${ALL_PUZZLES.length} gelöst`;
   $('trRating').textContent = Math.round(trainer.r);
   $('trStreak').textContent = trainer.streak ? `🔥 ${trainer.streak} in Folge` : `Rekord: ${trainer.best}`;
-  for (const k of visiblePuzzles()) {
+  const vis = visiblePuzzles();
+  for (const k of vis.slice(0, puzzle.shown || 40)) {
     const p = ALL_PUZZLES[k];
     const meta = puzzleMeta(p);
     const turn = p.fen.split(' ')[1];
@@ -997,6 +998,13 @@ function renderPuzzleList() {
       <span class="badge ${done ? 'done' : p.level}">${done ? '✓ gelöst' : p.level}</span>`;
     btn.onclick = () => { puzzle.training = false; startPuzzle(k); };
     list.appendChild(btn);
+  }
+  if (vis.length > (puzzle.shown || 40)) {
+    const more = document.createElement('button');
+    more.className = 'more';
+    more.textContent = `Weitere Rätsel anzeigen (${vis.length - (puzzle.shown || 40)} übrig)`;
+    more.onclick = () => { puzzle.shown = (puzzle.shown || 40) + 40; renderPuzzleList(); };
+    list.appendChild(more);
   }
 }
 
@@ -1533,6 +1541,7 @@ function init() {
 
   document.querySelectorAll('#puzzleFilter button').forEach(b => b.addEventListener('click', () => {
     puzzle.filter = b.dataset.f;
+    puzzle.shown = 40;
     document.querySelectorAll('#puzzleFilter button').forEach(x => x.classList.toggle('on', x === b));
     renderPuzzleList();
   }));
