@@ -16,7 +16,8 @@ Aufbau wie eine moderne Schach-App: Navigation links (auf dem Handy unten), gro�
 
 - **Neues Spiel**: Farbe Weiß / Schwarz / Zufall, 4 Computerstufen oder „Beide Seiten selbst“ (Analysebrett), Brettfarben Grün / Holz / Blau
 - **Zugliste mit Bewertungssymbolen** (📖 Theoriezug, ★ bester Zug, ✓ gut, ?! ungenau, ? Fehler, ?? grober Fehler) und Zusammenfassung am Spielende
-- **3189 echte Rätsel aus der Lichess-Datenbank** (CC0, https://database.lichess.org/#puzzles) – aus echten Partien, mit eindeutiger Lösung und Wertung von echten Spielern (ca. 500–2700). Ablauf wie bei Lichess: Der Gegner zieht zuerst, dann muss genau der richtige Zug gefunden werden. Filter nach Schwierigkeit und Motiv (Gabel, Fesselung, Opfer, Zwischenzug, Zugzwang …)
+- **🔥 Tägliches Taktik-Training** – Tagesprogramm (Muster des Tages, Wiederholung, gemischte Rätsel ohne Motiv-Angabe, Rechen-Challenge), 26 Muster mit Erklärung und Erkennungszeichen, Statistik und Schwächen pro Muster, verteilte Wiederholung falsch gelöster Rätsel (1/3/7/14/30 Tage), Woodpecker-Zyklen, Tages-Serie und Stoppuhr
+- **11016 echte Rätsel aus der Lichess-Datenbank** (CC0, https://database.lichess.org/#puzzles) – aus echten Partien, mit eindeutiger Lösung und Wertung von echten Spielern (ca. 500–2700). Ablauf wie bei Lichess: Der Gegner zieht zuerst, dann muss genau der richtige Zug gefunden werden. Filter nach Schwierigkeit und Motiv (Gabel, Fesselung, Opfer, Zwischenzug, Zugzwang …)
 - **Rätsel-Training mit Wertung** – bekommt Rätsel passend zur eigenen Stärke, Elo-Wertung, Serien-Zähler
 - **Eröffnungen mit Varianten** – 48 Varianten; der Gegner wählt zufällig oder du suchst eine aus. Auch der Computer spielt dadurch abwechslungsreicher
 - **Eröffnungen nach Farbe filterbar** – 9 Lektionen speziell für Schwarz
@@ -36,6 +37,7 @@ Aufbau wie eine moderne Schach-App: Navigation links (auf dem Handy unten), gro�
 
 - `engine.js` – Schach-Engine (Zuggenerator, Bewertung, Alpha-Beta-Suche)
 - `data.js` – Eröffnungen (mit Varianten), handgemachte Rätsel und Tipps
+- `training.js` – Muster-Lehrplan und Trainingsprinzipien
 - `puzzles-lichess.js` – Rätsel aus der Lichess-Datenbank (Lizenz CC0)
 - `app.js` – Oberfläche und Trainer-Logik
 - `style.css` – Design (heller und dunkler Modus)

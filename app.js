@@ -1227,17 +1227,25 @@ function startPuzzle(k) {
   const p = ALL_PUZZLES[k];
   const meta = puzzleMeta(p);
   const s0 = E.parseFEN(p.fen);
-  Object.assign(puzzle, { idx: k, state: s0, lastMove: null, solved: false, failed: false, step: 1, rated: false, helped: false, hintShown: false });
+  Object.assign(puzzle, { idx: k, state: s0, lastMove: null, solved: false, failed: false, step: 1, rated: false, helped: false, hintShown: false, recorded: false, t0: 0 });
+  if (!session.active) { puzzle.hideTheme = false; puzzle.cue = null; puzzle.part = null; }
+  clearInterval(pzTimerId);
+  $('pzTimer').textContent = '';
   const me = meta.solverTurn;
   puzzle.me = me;
   $('puzzleListView').hidden = true;
   $('puzzleView').hidden = false;
-  $('pzTitle').textContent = meta.title;
+  $('pzTitle').textContent = puzzle.hideTheme ? 'Finde den besten Zug' : puzzle.cue ? puzzle.cue.name : meta.title;
+  $('pzSession').textContent = sessionHeader();
+  $('pzSession').hidden = !session.active;
+  const it = session.active && session.active.items[session.active.idx];
+  $('pzCue').innerHTML = puzzle.cue ? `<b>${puzzle.cue.icon} ${puzzle.cue.name}</b> – ${puzzle.cue.cues[0]}` : it && it.calc ? '🧮 <b>Rechen-Challenge:</b> Berechne die GANZE Variante im Kopf, bevor du den ersten Zug machst.' : it && it.hide ? '🎲 Motiv unbekannt – wie in einer echten Partie. Erst Schach, Schlagen, Drohung prüfen!' : '';
+  $('pzCue').hidden = !$('pzCue').innerHTML;
   $('pzLevel').textContent = `${p.level} · ${p.rating}`;
   $('pzLevel').className = 'badge ' + p.level;
   $('pzRatingNow').textContent = puzzle.training ? `🎯 Training · deine Wertung ${Math.round(trainer.r)}${trainer.streak ? ` · 🔥 ${trainer.streak}` : ''}` : '';
   $('pzTurn').className = 'turnbox ' + me;
-  $('pzTurn').innerHTML = `<span class="piece ${me}">${GLYPH.k}${VS}</span><span>Du spielst ${meta.side}<br><span style="font-weight:400">${meta.goal}</span></span>`;
+  $('pzTurn').innerHTML = `<span class="piece ${me}">${GLYPH.k}${VS}</span><span>Du spielst ${meta.side}<br><span style="font-weight:400">${puzzle.hideTheme ? `${meta.side} findet den besten Zug.` : meta.goal}</span></span>`;
   $('pzMsg').innerHTML = '<p class="small">Der Gegner zieht zuerst …</p>';
   ui.orientation = me;
   ui.mark = null; ui.arrows = []; ui.hintFrom = -1;
@@ -1260,6 +1268,7 @@ function startPuzzle(k) {
     puzzle.lastMove = m;
     ui.busy = false;
     render();
+    startPzTimer();
     $('pzMsg').innerHTML = `<p>Gegner spielt <b>${san}</b>.</p><p><b>Finde den besten Zug für ${meta.side}!</b></p><p class="small">Es gibt nur <b>einen</b> richtigen Zug. Prüfe Schachgebote, Schlagzüge und Drohungen – für beide Seiten.</p>`;
   }, 700);
   updateAskBox();
@@ -1280,6 +1289,7 @@ function puzzleMove(m) {
 
   if (!ok) {
     puzzle.failed = true;
+    recordResult(false);
     const d = ratePuzzle(false);
     puzzle.state = after; puzzle.lastMove = m;
     ui.mark = { sq: m.to, cls: 'wrong' };
@@ -1303,10 +1313,15 @@ function puzzleMove(m) {
   render();
   if (mate || puzzle.step >= p.moves.length) {
     puzzle.solved = true;
+    clearInterval(pzTimerId);
     const clean = !puzzle.failed && !puzzle.helped;
+    const secs = puzzle.t0 ? Math.round((Date.now() - puzzle.t0) / 1000) : 0;
+    recordResult(clean);
     const d = ratePuzzle(clean);
+    const speed = clean && secs ? `<p class="small">⏱ ${secs} s ${secs <= 15 ? '– blitzschnell, das Muster sitzt!' : secs <= 45 ? '– gut.' : '– beim nächsten Mal schneller erkennen.'}</p>` : '';
     $('pzMsg').innerHTML = `<p class="good">🎉 ${clean ? 'Gelöst – perfekt!' : 'Gelöst!'}${d !== '' ? ` <span class="small">(${d >= 0 ? '+' : ''}${d} Wertung)</span>` : ''}</p>
-      <p>Lösung: <b>${solutionSans(p)}</b></p><p class="small">Motive: ${meta.tags.join(', ')}</p>
+      ${speed}<p>Lösung: <b>${solutionSans(p)}</b></p><p class="small">Motive: ${meta.tags.join(', ')}</p>
+      ${session.active ? `<p class="small">Drück „› Weiter“ für das nächste Rätsel.</p>` : ''}
       <p class="small"><a href="https://lichess.org/training/${p.id}" target="_blank" rel="noopener">Rätsel ${p.id} auf Lichess</a></p>`;
     showToast(mate ? '♛ Schachmatt – gelöst!' : '🎉 Gelöst!', 1300);
     const solved = loadSolved();
@@ -1326,6 +1341,264 @@ function puzzleMove(m) {
     render();
     $('pzMsg').innerHTML = `<p class="good">✓ Richtig!</p><p>Gegner spielt <b>${de(E.toSAN(rs, r))}</b>. Und jetzt?</p>`;
   }, 600);
+}
+
+// ===================== Tägliches Taktik-Training =====================
+const DAY = 86400000;
+const todayStr = (d) => { const x = d ? new Date(d) : new Date(); return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; };
+const SRS_DAYS = [1, 3, 7, 14, 30];
+const tdata = { days: {}, srs: {}, stats: {}, lessonIdx: 0, wood: null };
+try { Object.assign(tdata, JSON.parse(localStorage.getItem('schach-taktik') || '{}')); } catch (e) { /* egal */ }
+function saveT() { try { localStorage.setItem('schach-taktik', JSON.stringify(tdata)); } catch (e) { /* egal */ } }
+
+const lessonOf = id => MOTIF_LESSONS.find(l => l.id === id);
+const puzzleHas = (p, themes) => themes.some(t => p.themes.includes(t));
+
+// Statistik pro Muster
+function lessonStats(l) {
+  const s = tdata.stats[l.id] || { ok: 0, fail: 0, time: 0 };
+  const n = s.ok + s.fail;
+  return { ...s, n, acc: n ? Math.round(100 * s.ok / n) : null, avg: s.ok ? Math.round(s.time / s.ok / 1000) : null };
+}
+
+function streakDays() {
+  let n = 0, d = Date.now();
+  if (!(tdata.days[todayStr()] || {}).done) d -= DAY; // heute noch offen: Serie zählt bis gestern
+  while ((tdata.days[todayStr(d)] || {}).done) { n++; d -= DAY; }
+  return n;
+}
+
+// Wählt n Rätsel nahe einer Zielwertung (bevorzugt ungelöste), ohne Doppelte
+function pickPuzzles(filter, target, n, exclude) {
+  const solved = new Set(loadSolved());
+  const ex = new Set(exclude || []);
+  let pool = [];
+  ALL_PUZZLES.forEach((p, k) => { if (!ex.has(k) && filter(p)) pool.push(k); });
+  const fresh = pool.filter(k => !solved.has(ALL_PUZZLES[k].key));
+  if (fresh.length >= n) pool = fresh;
+  pool.sort((a, b) => Math.abs(ALL_PUZZLES[a].rating - target) - Math.abs(ALL_PUZZLES[b].rating - target));
+  const top = pool.slice(0, Math.max(n * 4, 12));
+  const out = [];
+  while (out.length < n && top.length) out.push(top.splice(Math.floor(Math.random() * top.length), 1)[0]);
+  return out.sort((a, b) => ALL_PUZZLES[a].rating - ALL_PUZZLES[b].rating);
+}
+
+function dueReviews() {
+  const now = Date.now();
+  return Object.entries(tdata.srs).filter(([, v]) => v.due <= now).map(([key]) => ALL_PUZZLES.findIndex(p => p.key === key)).filter(k => k >= 0);
+}
+
+// Muster des Tages: das nächste im Lehrplan, das noch nicht sicher sitzt
+function lessonOfDay() {
+  for (let i = 0; i < MOTIF_LESSONS.length; i++) {
+    const l = MOTIF_LESSONS[(tdata.lessonIdx + i) % MOTIF_LESSONS.length];
+    const st = lessonStats(l);
+    if (!(st.n >= 15 && st.acc >= 85)) return l;
+  }
+  return MOTIF_LESSONS[tdata.lessonIdx % MOTIF_LESSONS.length];
+}
+
+// ---------- Sitzungen ----------
+const session = { active: null };
+
+function startSession(name, items, kind) {
+  if (!items.length) { showToast('Keine passenden Rätsel gefunden', 1500); return; }
+  session.active = { name, items, idx: 0, results: [], kind, started: Date.now() };
+  showTab('puzzles');
+  runSessionItem();
+}
+
+function runSessionItem() {
+  const S = session.active;
+  const it = S.items[S.idx];
+  puzzle.training = true;
+  puzzle.hideTheme = !!it.hide;
+  puzzle.cue = it.lesson ? lessonOf(it.lesson) : null;
+  puzzle.part = it.part;
+  startPuzzle(it.k);
+}
+
+function sessionHeader() {
+  const S = session.active;
+  if (!S) return '';
+  const it = S.items[S.idx];
+  return `${S.name} · ${it.part} · Rätsel ${S.idx + 1}/${S.items.length}`;
+}
+
+function nextSessionItem() {
+  const S = session.active;
+  if (!S) return false;
+  if (S.idx < S.items.length - 1) { S.idx++; runSessionItem(); return true; }
+  finishSession();
+  return true;
+}
+
+function finishSession() {
+  const S = session.active;
+  session.active = null;
+  const ok = S.results.filter(r => r.ok).length;
+  const times = S.results.filter(r => r.ok).map(r => r.ms);
+  const avg = times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length / 1000) : 0;
+  if (S.kind === 'daily') {
+    const d = tdata.days[todayStr()] = tdata.days[todayStr()] || {};
+    d.done = true; d.ok = ok; d.n = S.results.length;
+    tdata.lessonIdx = (MOTIF_LESSONS.indexOf(lessonOf(S.items[0].lesson)) + 1) % MOTIF_LESSONS.length;
+  }
+  if (S.kind === 'wood' && tdata.wood) {
+    const W = tdata.wood;
+    W.cycles.push({ ok, n: S.results.length, sec: Math.round((Date.now() - S.started) / 1000), date: todayStr() });
+  }
+  saveT();
+  showTab('train');
+  const pct = S.results.length ? Math.round(100 * ok / S.results.length) : 0;
+  $('trainMsg').innerHTML = `<p class="good">🎉 ${S.name} geschafft!</p><p><b>${ok} von ${S.results.length}</b> richtig (${pct} %)${avg ? ` · im Schnitt ${avg} s pro gelöstem Rätsel` : ''}.</p>
+    ${S.kind === 'daily' ? `<p class="small">🔥 Serie: ${streakDays()} Tag(e). Falsch gelöste Rätsel kommen morgen in der Wiederholung zurück.</p>` : ''}`;
+  showToast('🎉 Training geschafft!', 1600);
+}
+
+// Ergebnis eines Rätsels speichern (einmal pro Rätsel)
+function recordResult(ok) {
+  if (puzzle.recorded) return;
+  puzzle.recorded = true;
+  const p = ALL_PUZZLES[puzzle.idx];
+  const ms = puzzle.t0 ? Date.now() - puzzle.t0 : 0;
+  for (const l of MOTIF_LESSONS) {
+    if (!puzzleHas(p, l.themes)) continue;
+    const s = tdata.stats[l.id] = tdata.stats[l.id] || { ok: 0, fail: 0, time: 0 };
+    if (ok) { s.ok++; s.time += ms; } else s.fail++;
+  }
+  const r = tdata.srs[p.key];
+  if (!ok) tdata.srs[p.key] = { box: 0, due: Date.now() + DAY - 3600000 };
+  else if (r) {
+    if (r.box + 1 >= SRS_DAYS.length) delete tdata.srs[p.key];
+    else tdata.srs[p.key] = { box: r.box + 1, due: Date.now() + SRS_DAYS[r.box + 1] * DAY - 3600000 };
+  }
+  const d = tdata.days[todayStr()] = tdata.days[todayStr()] || {};
+  d.total = (d.total || 0) + 1;
+  if (session.active) session.active.results.push({ k: puzzle.idx, ok, ms });
+  saveT();
+}
+
+// ---------- Tagestraining zusammenstellen ----------
+function buildDaily() {
+  const r = trainer.r;
+  const l = lessonOfDay();
+  const used = [];
+  const add = (ks, part, extra) => ks.map(k => { used.push(k); return { k, part, ...extra }; });
+  const items = [];
+  items.push(...add(pickPuzzles(p => puzzleHas(p, l.themes), r - 250, 8, used), `Muster: ${l.name}`, { lesson: l.id }));
+  items.push(...add(dueReviews().slice(0, 5), 'Wiederholung', { hide: true }));
+  items.push(...add(pickPuzzles(() => true, r, 6, used), 'Gemischt', { hide: true }));
+  items.push(...add(pickPuzzles(p => p.moves.length >= 6, r + 250, 1, used), 'Rechen-Challenge', { hide: true, calc: true }));
+  if (!items[0].lesson) items[0].lesson = l.id;
+  return items;
+}
+
+function startDaily() { startSession('Tagestraining', buildDaily(), 'daily'); }
+
+function startLesson10(id) {
+  const l = lessonOf(id);
+  const ks = pickPuzzles(p => puzzleHas(p, l.themes), trainer.r - 150, 10);
+  startSession(`Muster: ${l.name}`, ks.map(k => ({ k, part: l.name, lesson: l.id })), 'lesson');
+}
+
+function startReviews() {
+  startSession('Wiederholung', dueReviews().slice(0, 15).map(k => ({ k, part: 'Wiederholung', hide: true })), 'review');
+}
+
+// Woodpecker: feste Sammlung, die in Zyklen immer schneller gelöst wird
+function startWoodpecker(reset) {
+  if (!tdata.wood || reset) {
+    const ks = pickPuzzles(() => true, trainer.r - 200, 40);
+    tdata.wood = { keys: ks.map(k => ALL_PUZZLES[k].key), cycles: [], created: todayStr() };
+    saveT();
+  }
+  const ks = tdata.wood.keys.map(key => ALL_PUZZLES.findIndex(p => p.key === key)).filter(k => k >= 0);
+  const cyc = tdata.wood.cycles.length + 1;
+  startSession(`Woodpecker Zyklus ${cyc}`, ks.map(k => ({ k, part: `Zyklus ${cyc}`, hide: true })), 'wood');
+}
+
+// ---------- Übersicht ----------
+function renderTrain() {
+  const today = tdata.days[todayStr()] || {};
+  const l = lessonOfDay();
+  const due = dueReviews().length;
+  $('trStreakDays').textContent = streakDays();
+  $('trRating2').textContent = Math.round(trainer.r);
+  $('trToday').innerHTML = today.done
+    ? `<p class="good">✓ Heute erledigt: ${today.ok}/${today.n} richtig.</p><p class="small">Du kannst trotzdem weitertrainieren – zum Beispiel ein Muster gezielt üben.</p>`
+    : `<p><b>Heute ca. 15–20 Minuten:</b></p>
+       <ol class="plan"><li><b>Muster des Tages: ${l.icon} ${l.name}</b> – 8 Rätsel etwas unter deiner Stärke, für schnelle Mustererkennung</li>
+       <li><b>Wiederholung</b> – ${due ? `${Math.min(due, 5)} Rätsel, die du früher falsch hattest` : 'heute nichts fällig'}</li>
+       <li><b>Gemischt</b> – 6 Rätsel ohne Motiv-Angabe, wie in einer echten Partie</li>
+       <li><b>Rechen-Challenge</b> – 1 schweres Rätsel: erst zu Ende rechnen, dann ziehen</li></ol>`;
+  $('trDailyBtn').textContent = today.done ? '▶ Noch eine Runde' : '▶ Tagestraining starten';
+  $('trLesson').innerHTML = `<h3>${l.icon} Muster des Tages: ${l.name}</h3><p>${l.what}</p>
+    <p class="small"><b>So erkennst du es:</b></p><ul class="cues">${l.cues.map(c => `<li>${c}</li>`).join('')}</ul>
+    <p class="tipline">🎓 ${l.tip}</p>`;
+  $('trReviewBtn').disabled = !due;
+  $('trReviewBtn').textContent = due ? `↺ Wiederholung (${due} fällig)` : '↺ Keine Wiederholung fällig';
+  // Woodpecker
+  const W = tdata.wood;
+  $('trWood').innerHTML = W && W.cycles.length
+    ? `<p class="small">Sammlung mit ${W.keys.length} Rätseln · ${W.cycles.length} Zyklus/Zyklen geschafft:</p>
+       <div class="woodrows">${W.cycles.map((c, i) => `<span>Zyklus ${i + 1}: <b>${c.ok}/${c.n}</b> in ${Math.floor(c.sec / 60)}:${String(c.sec % 60).padStart(2, '0')} min</span>`).join('')}</div>
+       <p class="small">Ziel: jeden Zyklus schneller und fehlerfreier.</p>`
+    : '<p class="small">40 feste Rätsel etwas unter deiner Stärke. Löse sie, dann dieselben wieder – jedes Mal schneller, bis die Muster automatisch kommen.</p>';
+  $('trWoodBtn').textContent = W ? `▶ Zyklus ${W.cycles.length + 1} starten` : '▶ Sammlung erstellen & starten';
+  $('trWoodReset').hidden = !W;
+  // Muster-Übersicht
+  const grid = $('trMotifs');
+  grid.innerHTML = '';
+  const withStats = MOTIF_LESSONS.map(m => ({ m, s: lessonStats(m) }));
+  const weak = withStats.filter(x => x.s.n >= 5).sort((a, b) => a.s.acc - b.s.acc).slice(0, 3).filter(x => x.s.acc < 80);
+  $('trWeak').innerHTML = weak.length
+    ? `💪 Deine Schwächen: ${weak.map(x => `<button class="chip" data-l="${x.m.id}">${x.m.icon} ${x.m.name} (${x.s.acc} %)</button>`).join(' ')}`
+    : '<span class="small">Löse ein paar Rätsel, dann zeige ich dir hier deine schwächsten Muster.</span>';
+  for (const { m, s } of withStats) {
+    const b = document.createElement('button');
+    b.className = 'motif';
+    b.dataset.l = m.id;
+    const pct = s.acc === null ? 0 : s.acc;
+    b.innerHTML = `<span class="mi">${m.icon}</span><span class="mn">${m.name}</span>
+      <span class="mbar"><span style="width:${pct}%" class="${s.acc === null ? '' : s.acc >= 85 ? 'hi' : s.acc >= 60 ? 'mid' : 'lo'}"></span></span>
+      <span class="ms">${s.n ? `${s.acc} % · ${s.n} gelöst${s.avg ? ` · Ø ${s.avg} s` : ''}` : 'noch nicht geübt'}</span>`;
+    grid.appendChild(b);
+  }
+  document.querySelectorAll('#trMotifs .motif, #trWeak .chip').forEach(b => { b.onclick = () => showLessonCard(b.dataset.l); });
+  // Brett: Beispiel aus dem Muster des Tages
+  const ex = pickPuzzles(p => puzzleHas(p, l.themes), trainer.r - 300, 1)[0];
+  if (ex !== undefined) {
+    const p = ALL_PUZZLES[ex];
+    let s = E.parseFEN(p.fen);
+    const m = uciToMove(s, p.moves[0]);
+    s = E.makeMove(s, m);
+    ui.orientation = s.turn;
+    setContext({ state: s, lastMove: m, canMove: () => false, onMove() {}, showThreats: () => false, noCaps: true });
+  }
+}
+
+function showLessonCard(id) {
+  const l = lessonOf(id);
+  const s = lessonStats(l);
+  $('trMsg2').innerHTML = `<div class="lessoncard"><h3>${l.icon} ${l.name}</h3><p>${l.what}</p>
+    <p class="small"><b>So erkennst du es:</b></p><ul class="cues">${l.cues.map(c => `<li>${c}</li>`).join('')}</ul>
+    <p class="tipline">🎓 ${l.tip}</p>
+    <p class="small">${s.n ? `Bisher: ${s.ok} richtig, ${s.fail} falsch.` : 'Noch nicht geübt.'}</p>
+    <button class="primary" id="trGo">▶ 10 Rätsel zu „${l.name}“</button></div>`;
+  $('trGo').onclick = () => startLesson10(id);
+  $('trMsg2').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// Sekunden-Uhr im Rätsel
+let pzTimerId = null;
+function startPzTimer() {
+  clearInterval(pzTimerId);
+  puzzle.t0 = Date.now();
+  const el = $('pzTimer');
+  const tick = () => { if (!puzzle.t0 || puzzle.solved) return; el.textContent = `⏱ ${Math.floor((Date.now() - puzzle.t0) / 1000)} s`; };
+  tick();
+  pzTimerId = setInterval(tick, 500);
 }
 
 // ===================== KI-Trainer (Fragen stellen) =====================
@@ -1642,7 +1915,7 @@ function updateAskBox() {
 function showTab(tab) {
   mode = tab;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['play', 'openings', 'puzzles']) $('panel-' + t).hidden = t !== tab;
+  for (const t of ['play', 'train', 'openings', 'puzzles']) $('panel-' + t).hidden = t !== tab;
   $('panel-tips').hidden = tab !== 'tips';
   $('boardArea').hidden = tab === 'tips';
   $('panel').hidden = tab === 'tips';
@@ -1660,6 +1933,11 @@ function showTab(tab) {
     renderOpeningList();
     ui.orientation = 'w';
     setContext({ state: E.parseFEN(E.START_FEN), lastMove: null, canMove: () => false, onMove() {}, showThreats: () => false });
+  } else if (tab === 'train') {
+    clearInterval(pzTimerId);
+    renderTrain();
+  } else if (tab === 'puzzles' && session.active) {
+    $('puzzleListView').hidden = true; $('puzzleView').hidden = false;
   } else if (tab === 'puzzles') {
     $('puzzleListView').hidden = false; $('puzzleView').hidden = true;
     renderPuzzleList();
@@ -1737,11 +2015,12 @@ function init() {
     document.querySelectorAll('#puzzleFilter button').forEach(x => x.classList.toggle('on', x === b));
     renderPuzzleList();
   }));
-  $('puzzleBack').onclick = () => showTab('puzzles');
+  $('puzzleBack').onclick = () => { if (session.active) { session.active = null; showTab('train'); } else showTab('puzzles'); };
   $('pzHint').onclick = () => {
     if (puzzle.solved || ui.busy) return;
     const meta = puzzleMeta(ALL_PUZZLES[puzzle.idx]);
     puzzle.helped = true;
+    recordResult(false);
     ratePuzzle(false);
     if (!puzzle.hintShown) { $('pzMsg').insertAdjacentHTML('beforeend', `<p class="small">💡 ${meta.hint}</p>`); puzzle.hintShown = true; }
     else { const m = puzzleSolution(); if (m) { ui.hintFrom = m.from; render(); } }
@@ -1749,6 +2028,7 @@ function init() {
   $('pzSolve').onclick = () => {
     if (puzzle.solved || ui.busy) return;
     puzzle.helped = true;
+    recordResult(false);
     ratePuzzle(false);
     const m = puzzleSolution();
     if (m) { ui.arrows = [{ from: m.from, to: m.to }]; ui.hintFrom = -1; render(); }
@@ -1756,9 +2036,15 @@ function init() {
   };
   $('pzRetry').onclick = () => startPuzzle(puzzle.idx);
   $('trStart').onclick = () => nextTrainingPuzzle();
+  $('trDailyBtn').onclick = startDaily;
+  $('trReviewBtn').onclick = startReviews;
+  $('trWoodBtn').onclick = () => startWoodpecker(false);
+  $('trWoodReset').onclick = () => { tdata.wood = null; saveT(); renderTrain(); };
+  $('trPrinciples').innerHTML = GM_PRINCIPLES.map(([t, d]) => `<details><summary>${t}</summary><p>${d}</p></details>`).join('');
   $('themeSel').innerHTML = THEME_FILTERS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
   $('themeSel').onchange = () => { puzzle.theme = $('themeSel').value; puzzle.shown = 40; renderPuzzleList(); };
   $('pzNext').onclick = () => {
+    if (session.active) { if (!puzzle.solved) recordResult(false); nextSessionItem(); return; }
     if (puzzle.training) { nextTrainingPuzzle(); return; }
     const vis = visiblePuzzles();
     const pos = vis.indexOf(puzzle.idx);

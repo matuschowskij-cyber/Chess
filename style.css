@@ -281,6 +281,46 @@ button.link { border: 0; background: none; color: var(--accent); padding: 0; fon
 .selrow select { width: 100%; font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
 .coach-msg a { color: var(--accent); }
 
+/* Taktik-Training */
+.streak { text-align: center; line-height: 1; }
+.streak span { font-size: 1.6rem; font-weight: 800; color: #e8590c; }
+.streak small { display: block; font-size: .7rem; color: var(--muted); }
+.trainmsg:empty { display: none; }
+.trainmsg { background: var(--coach-bg); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.trainmsg p { margin: 0 0 4px; }
+.today p { margin: 0 0 6px; }
+.plan { margin: 0 0 10px; padding-left: 1.3em; font-size: .88rem; }
+.plan li { margin-bottom: 4px; }
+.lessoncard { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin: 10px 0; background: var(--surface-2); }
+.lessoncard h3 { margin: 0 0 6px; }
+.lessoncard p { margin: 0 0 6px; font-size: .9rem; }
+.cues { margin: 0 0 8px; padding-left: 1.2em; font-size: .86rem; }
+.cues li { margin-bottom: 3px; }
+.tipline { font-size: .85rem; border-left: 3px solid var(--accent); padding-left: 8px; }
+.lessoncard button { margin-top: 4px; padding: 9px 14px; border-radius: 10px; border: 1px solid var(--accent-dark); font-weight: 700; }
+.weak { margin: 8px 0; font-size: .88rem; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { font-size: .8rem; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); font-weight: 600; }
+.motifs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.motif { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); }
+.motif:hover { border-color: var(--accent); }
+.motif .mi { grid-row: span 3; font-size: 1.3rem; }
+.motif .mn { font-weight: 700; font-size: .85rem; }
+.motif .mbar { height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.motif .mbar span { display: block; height: 100%; }
+.motif .mbar .hi { background: var(--q-best); }
+.motif .mbar .mid { background: var(--q-inacc); }
+.motif .mbar .lo { background: var(--q-blund); }
+.motif .ms { font-size: .7rem; color: var(--muted); }
+button.wide { width: 100%; padding: 9px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); font-weight: 700; margin-bottom: 6px; }
+.woodrows { display: flex; flex-direction: column; gap: 2px; font-size: .85rem; margin-bottom: 6px; }
+.principles details { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; background: var(--surface-2); }
+.principles summary { font-weight: 700; cursor: pointer; font-size: .9rem; }
+.principles p { margin: 6px 0 2px; font-size: .86rem; }
+.pzhead { display: flex; justify-content: space-between; gap: 8px; font-size: .78rem; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+.pzhead:has(.pzsession[hidden]) .pztimer { margin-left: auto; }
+.pztimer { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pzcue { font-size: .84rem; background: var(--surface-2); border: 1px dashed var(--border); border-radius: 8px; padding: 7px 10px; margin-bottom: 8px; }
+
 /* KI-Chat */
 .ask { margin-top: 4px; }
 #olAsk .ask, #pzAsk .ask { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 12px; }
